@@ -1,0 +1,443 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Better Auth persistence models. Keep these names and required fields aligned
+// with the Prisma adapter so authentication can be swapped without changing the domain.
+model User {
+  id            String        @id
+  name          String
+  email         String        @unique
+  emailVerified Boolean       @default(false)
+  image         String?
+  role          String        @default("VIEWER")
+  active        Boolean       @default(true)
+  departmentId  String?
+  department    Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  accounts      Account[]
+  sessions      Session[]
+  generations   TimetableGeneration[]
+  approvedGenerations TimetableGeneration[] @relation("TimetableApprover")
+  auditLogs     AuditLog[]
+  imports       RegistrationImport[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([departmentId])
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+}
+
+model College {
+  id           String       @id @default(cuid())
+  name         String
+  code         String       @unique
+  active       Boolean      @default(true)
+  departments  Department[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model Department {
+  id           String        @id @default(cuid())
+  collegeId    String
+  college      College       @relation(fields: [collegeId], references: [id], onDelete: Restrict)
+  name         String
+  code         String
+  active       Boolean       @default(true)
+  programmes   Programme[]
+  courses      Course[]
+  invigilators Invigilator[]
+  users        User[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([collegeId, code])
+  @@index([collegeId])
+}
+
+model Programme {
+  id         String             @id @default(cuid())
+  departmentId String
+  department Department         @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  name       String
+  code       String
+  active     Boolean            @default(true)
+  students   Student[]
+  courses    ProgrammeCourse[]
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  @@unique([departmentId, code])
+  @@index([departmentId])
+}
+
+model AcademicSession {
+  id           String              @id @default(cuid())
+  name         String              @unique
+  active       Boolean             @default(false)
+  startYear    Int
+  endYear      Int
+  semesters    Semester[]
+  examPeriods  ExamPeriod[]
+  registrations CourseRegistration[]
+  generations  TimetableGeneration[]
+  imports      RegistrationImport[]
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+}
+
+model Semester {
+  id               String              @id @default(cuid())
+  academicSessionId String
+  academicSession  AcademicSession     @relation(fields: [academicSessionId], references: [id], onDelete: Cascade)
+  name             String
+  semesterNumber   Int
+  active           Boolean             @default(true)
+  courses          Course[]
+  examPeriods      ExamPeriod[]
+  registrations    CourseRegistration[]
+  generations      TimetableGeneration[]
+  imports           RegistrationImport[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@unique([academicSessionId, semesterNumber])
+  @@index([academicSessionId])
+}
+
+model Course {
+  id                   String                 @id @default(cuid())
+  code                 String
+  normalizedCode       String?
+  title                String
+  creditUnits          Int
+  level                Int
+  departmentId         String
+  department           Department             @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  semesterId           String
+  semester             Semester               @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  estimatedStudentCount Int
+  active               Boolean                @default(true)
+  programmes           ProgrammeCourse[]
+  registrations        CourseRegistration[]
+  schedules             ExamSchedule[]
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  @@unique([semesterId, normalizedCode])
+  @@index([departmentId])
+  @@index([semesterId])
+  @@index([normalizedCode])
+}
+
+model ProgrammeCourse {
+  programmeId String
+  courseId    String
+  programme   Programme @relation(fields: [programmeId], references: [id], onDelete: Cascade)
+  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@id([programmeId, courseId])
+  @@index([courseId])
+}
+
+model Student {
+  id            String              @id @default(cuid())
+  matricNumber  String              @unique
+  name          String?
+  programmeId   String
+  programme     Programme           @relation(fields: [programmeId], references: [id], onDelete: Restrict)
+  level         Int
+  active        Boolean             @default(true)
+  registrations CourseRegistration[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([programmeId, level])
+}
+
+model CourseRegistration {
+  id               String         @id @default(cuid())
+  studentId        String
+  courseId         String
+  sessionId        String
+  semesterId       String
+  student          Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  course           Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  session          AcademicSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  semester         Semester       @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  createdAt        DateTime       @default(now())
+
+  @@unique([studentId, courseId, sessionId, semesterId])
+  @@index([courseId, sessionId, semesterId])
+  @@index([studentId, sessionId, semesterId])
+}
+
+model Venue {
+  id                 String                @id @default(cuid())
+  name               String
+  code               String                @unique
+  location           String?
+  capacity           Int
+  active             Boolean               @default(true)
+  assignments        ExamVenueAssignment[]
+  invigilationAssignments InvigilationAssignment[]
+  unavailablePeriods  VenueUnavailablePeriod[]
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+}
+
+model Invigilator {
+  id                       String                 @id @default(cuid())
+  staffId                  String?                @unique
+  name                     String
+  email                    String?                @unique
+  departmentId             String?
+  department               Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  active                   Boolean                @default(true)
+  maximumDailyAssignments Int                    @default(2)
+  assignments              InvigilationAssignment[]
+  unavailablePeriods        InvigilatorUnavailablePeriod[]
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  @@index([departmentId])
+}
+
+model ExamPeriod {
+  id               String          @id @default(cuid())
+  sessionId        String
+  semesterId       String
+  name             String
+  startDate        DateTime
+  endDate          DateTime
+  active           Boolean         @default(true)
+  session          AcademicSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  semester         Semester        @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  timeSlots        ExamTimeSlot[]
+  generations      TimetableGeneration[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@unique([sessionId, semesterId, name])
+  @@index([sessionId, semesterId])
+}
+
+model ExamTimeSlot {
+  id           String          @id @default(cuid())
+  examPeriodId String
+  date         DateTime
+  startTime    String
+  endTime      String
+  examPeriod   ExamPeriod      @relation(fields: [examPeriodId], references: [id], onDelete: Cascade)
+  schedules    ExamSchedule[]
+  createdAt    DateTime        @default(now())
+
+  @@unique([examPeriodId, date, startTime, endTime])
+  @@index([examPeriodId, date])
+}
+
+enum ExamScheduleStatus {
+  DRAFT
+  GENERATED
+  UNDER_REVIEW
+  APPROVED
+  PUBLISHED
+  ARCHIVED
+}
+
+model ExamSchedule {
+  id             String                 @id @default(cuid())
+  courseId       String
+  timeSlotId     String
+  generationId   String?
+  status         ExamScheduleStatus     @default(DRAFT)
+  generatedBy    String?
+  publishedAt    DateTime?
+  course         Course                 @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  timeSlot       ExamTimeSlot           @relation(fields: [timeSlotId], references: [id], onDelete: Restrict)
+  generation     TimetableGeneration?  @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  venues         ExamVenueAssignment[]
+  invigilators   InvigilationAssignment[]
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@unique([generationId, courseId, timeSlotId])
+  @@index([timeSlotId])
+  @@index([generationId])
+}
+
+model ExamVenueAssignment {
+  examScheduleId String
+  venueId        String
+  allocatedCapacity Int
+  examSchedule   ExamSchedule @relation(fields: [examScheduleId], references: [id], onDelete: Cascade)
+  venue          Venue        @relation(fields: [venueId], references: [id], onDelete: Restrict)
+
+  @@id([examScheduleId, venueId])
+  @@index([venueId])
+}
+
+model InvigilationAssignment {
+  examScheduleId String
+  invigilatorId  String
+  venueId        String?
+  examSchedule   ExamSchedule @relation(fields: [examScheduleId], references: [id], onDelete: Cascade)
+  invigilator    Invigilator  @relation(fields: [invigilatorId], references: [id], onDelete: Restrict)
+  venue          Venue?       @relation(fields: [venueId], references: [id], onDelete: SetNull)
+
+  @@id([examScheduleId, invigilatorId])
+  @@index([invigilatorId])
+}
+
+model TimetableGeneration {
+  id          String          @id @default(cuid())
+  sessionId   String
+  semesterId  String
+  periodId    String
+  generatedBy String
+  generatedAt DateTime        @default(now())
+  status      String
+  reviewStatus TimetableReviewStatus @default(DRAFT)
+  revision    Int                   @default(0)
+  approvedAt  DateTime?
+  approvedBy  String?
+  lockKey     String?       @unique
+  engineVersion String?
+  seed        Int?
+  attemptCount Int?
+  score       Float?
+  metadata    Json?
+  session     AcademicSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  semester    Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  period      ExamPeriod      @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  generator   User            @relation(fields: [generatedBy], references: [id], onDelete: Restrict)
+  approver    User?           @relation("TimetableApprover", fields: [approvedBy], references: [id], onDelete: SetNull)
+  schedules   ExamSchedule[]
+
+  @@index([sessionId, semesterId])
+}
+
+enum TimetableReviewStatus {
+  DRAFT
+  UNDER_REVIEW
+  APPROVED
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entity     String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([entity, entityId])
+}
+
+model VenueUnavailablePeriod {
+  id         String   @id @default(cuid())
+  venueId    String
+  date       DateTime
+  startTime  String
+  endTime    String
+  reason     String?
+  venue      Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@index([venueId, date])
+}
+
+model InvigilatorUnavailablePeriod {
+  id             String       @id @default(cuid())
+  invigilatorId  String
+  date           DateTime
+  startTime      String
+  endTime        String
+  reason         String?
+  invigilator    Invigilator  @relation(fields: [invigilatorId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@index([invigilatorId, date])
+}
+
+enum ImportStatus {
+  PENDING
+  VALIDATED
+  COMPLETED
+  FAILED
+}
+
+model RegistrationImport {
+  id                   String          @id @default(cuid())
+  fileName             String
+  sessionId            String
+  semesterId           String
+  uploadedBy           String
+  totalRows            Int
+  validRows            Int
+  invalidRows          Int
+  duplicateRows        Int
+  createdStudents      Int           @default(0)
+  createdRegistrations Int           @default(0)
+  status               ImportStatus
+  errors               Json?
+  session              AcademicSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  semester             Semester        @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  uploader             User            @relation(fields: [uploadedBy], references: [id], onDelete: Restrict)
+  createdAt            DateTime        @default(now())
+
+  @@index([sessionId, semesterId, createdAt])
+  @@index([uploadedBy, createdAt])
+}

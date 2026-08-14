@@ -1,0 +1,40 @@
+export type SchedulingSession = { id: string; name: string; active: boolean };
+export type SchedulingSemester = { id: string; sessionId: string; name: string; active: boolean };
+export type SchedulingExamPeriod = { id: string; sessionId: string; semesterId: string; name: string; startDate: string; endDate: string; active: boolean };
+export type SchedulingCourse = { id: string; code: string; title: string; level: number; estimatedStudentCount: number; active: boolean };
+export type SchedulingStudent = { id: string; matricNumber: string; active: boolean };
+export type SchedulingRegistration = { studentId: string; courseId: string; sessionId: string; semesterId: string };
+export type SchedulingTimeSlot = { id: string; examPeriodId: string; date: string; startTime: string; endTime: string };
+export type SchedulingVenue = { id: string; code: string; name: string; capacity: number; active: boolean };
+export type SchedulingInvigilator = { id: string; staffId: string | null; name: string; active: boolean; maximumDailyAssignments: number };
+export type SchedulingUnavailablePeriod = { resourceId: string; date: string; startTime: string; endTime: string; reason?: string | null };
+
+export type SchedulingDataset = {
+  session: SchedulingSession;
+  semester: SchedulingSemester;
+  examPeriod: SchedulingExamPeriod;
+  courses: SchedulingCourse[];
+  students: SchedulingStudent[];
+  registrations: SchedulingRegistration[];
+  timeSlots: SchedulingTimeSlot[];
+  venues: SchedulingVenue[];
+  venueUnavailability: SchedulingUnavailablePeriod[];
+  invigilators: SchedulingInvigilator[];
+  invigilatorUnavailability: SchedulingUnavailablePeriod[];
+};
+
+export type CourseConflictEdge = { courseAId: string; courseBId: string; sharedStudentCount: number; sharedStudentIds?: string[] };
+export type VenueAssignment = { venueId: string; allocatedCapacity: number };
+export type InvigilatorAssignment = { invigilatorId: string; venueId?: string };
+export type ExamAssignment = { courseId: string; timeSlotId: string; venues: VenueAssignment[]; invigilators: InvigilatorAssignment[] };
+export type ConstraintViolation = { code: string; message: string; metadata: Record<string, unknown> };
+export type UnscheduledCourse = { courseId: string; code: string; reason: string; diagnostics: CourseDiagnostic };
+export type SlotEvaluation = { timeSlotId: string; feasible: boolean; hardViolations: ConstraintViolation[]; softPenalty: number; venueAllocation?: VenueAllocationResult; invigilatorAllocation?: InvigilatorAllocationResult };
+export type CourseDiagnostic = { courseId: string; candidateCount: number; conflictingCourses: { courseId: string; sharedStudentCount: number }[]; attemptedSlots: SlotEvaluation[] };
+export type CandidateTimetable = { assignments: ExamAssignment[]; unscheduledCourses: UnscheduledCourse[]; hardViolations: ConstraintViolation[]; softScore: number; metrics: TimetableMetrics };
+export type VenueAllocationResult = { success: boolean; venueAssignments: VenueAssignment[]; totalCapacity: number; candidateCount: number; unusedCapacity: number; failureReason?: string };
+export type InvigilatorAllocationResult = { success: boolean; invigilators: InvigilatorAssignment[]; failureReason?: string; attempted: number };
+export type TimetableMetrics = { totalCourses: number; scheduledCourses: number; unscheduledCourses: number; totalCandidates: number; hardViolationCount: number; averageVenueUtilization: number; totalUnusedSeats: number; studentBackToBackCount: number; studentDailyOverloadCount: number; invigilatorDailyOverloadCount: number; invigilatorAssignmentMin: number; invigilatorAssignmentMax: number; invigilatorAssignmentAverage: number; invigilatorWorkloadVariance: number; venueSplitCount: number };
+export type TimetableValidationResult = { valid: boolean; violations: ConstraintViolation[] };
+export type ReadinessIssue = { code: string; message: string; metadata: Record<string, unknown> };
+export type GenerationReadiness = { ready: boolean; blockers: ReadinessIssue[]; warnings: ReadinessIssue[]; summary: { courses: number; students: number; registrations: number; timeSlots: number; venues: number; totalVenueCapacity: number; invigilators: number; conflictEdges: number; conflictDensity: number } };

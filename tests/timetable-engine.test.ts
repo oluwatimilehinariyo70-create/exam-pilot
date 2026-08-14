@@ -1,0 +1,39 @@
+import { describe, expect, it } from "vitest";
+
+import { allocateInvigilators } from "@/domain/timetable/allocation/invigilators";
+import { allocateVenues } from "@/domain/timetable/allocation/venues";
+import { DEFAULT_ENGINE_CONFIG } from "@/domain/timetable/config";
+import { validateHardConstraints } from "@/domain/timetable/constraints/hard";
+import { buildConflictGraph } from "@/domain/timetable/graph/conflict-graph";
+import { generateTimetable } from "@/domain/timetable/generation/generate";
+import { validateGenerationReadiness } from "@/domain/timetable/validation/readiness";
+import { validateTimetable } from "@/domain/timetable/validation/timetable-validator";
+import { calculateMetrics, scoreTimetable } from "@/domain/timetable/scoring/score";
+import type { CandidateTimetable, SchedulingDataset } from "@/domain/timetable/types";
+
+function dataset(overrides: Partial<SchedulingDataset> = {}): SchedulingDataset {
+  return { session: { id: "session", name: "2026/2027", active: true }, semester: { id: "semester", sessionId: "session", name: "First", active: true }, examPeriod: { id: "period", sessionId: "session", semesterId: "semester", name: "Exam", startDate: "2027-02-01", endDate: "2027-02-05", active: true }, courses: [{ id: "a", code: "CSC 401", title: "A", level: 400, estimatedStudentCount: 2, active: true }, { id: "b", code: "CSC 405", title: "B", level: 400, estimatedStudentCount: 2, active: true }, { id: "c", code: "MTH 301", title: "C", level: 300, estimatedStudentCount: 1, active: true }], students: [{ id: "s1", matricNumber: "S1", active: true }, { id: "s2", matricNumber: "S2", active: true }], registrations: [{ studentId: "s1", courseId: "a", sessionId: "session", semesterId: "semester" }, { studentId: "s1", courseId: "b", sessionId: "session", semesterId: "semester" }, { studentId: "s2", courseId: "a", sessionId: "session", semesterId: "semester" }, { studentId: "s2", courseId: "c", sessionId: "session", semesterId: "semester" }], timeSlots: [{ id: "t1", examPeriodId: "period", date: "2027-02-01", startTime: "09:00", endTime: "12:00" }, { id: "t2", examPeriodId: "period", date: "2027-02-01", startTime: "14:00", endTime: "17:00" }, { id: "t3", examPeriodId: "period", date: "2027-02-02", startTime: "09:00", endTime: "12:00" }], venues: [{ id: "v1", code: "H100", name: "Hall", capacity: 100, active: true }, { id: "v2", code: "H300", name: "Large Hall", capacity: 300, active: true }], venueUnavailability: [], invigilators: [{ id: "i1", staffId: "I1", name: "Invigilator 1", active: true, maximumDailyAssignments: 2 }, { id: "i2", staffId: "I2", name: "Invigilator 2", active: true, maximumDailyAssignments: 2 }], invigilatorUnavailability: [], ...overrides };
+}
+
+function emptyCandidate(): CandidateTimetable { return { assignments: [], unscheduledCourses: [], hardViolations: [], softScore: 0, metrics: { totalCourses: 0, scheduledCourses: 0, unscheduledCourses: 0, totalCandidates: 0, hardViolationCount: 0, averageVenueUtilization: 0, totalUnusedSeats: 0, studentBackToBackCount: 0, studentDailyOverloadCount: 0, invigilatorDailyOverloadCount: 0, invigilatorAssignmentMin: 0, invigilatorAssignmentMax: 0, invigilatorAssignmentAverage: 0, invigilatorWorkloadVariance: 0, venueSplitCount: 0 } }; }
+
+describe("timetable conflict graph", () => {
+  it("builds weighted deterministic edges from student registrations", () => { const graph = buildConflictGraph(dataset()); expect(graph.edges).toEqual([{ courseAId: "a", courseBId: "b", sharedStudentCount: 1, sharedStudentIds: ["s1"] }, { courseAId: "a", courseBId: "c", sharedStudentCount: 1, sharedStudentIds: ["s2"] }]); expect(graph.getCourseDegree("a")).toBe(2); expect(graph.hasConflict("b", "c")).toBe(false); });
+});
+
+describe("timetable allocations and validation", () => {
+  it("chooses the smallest single venue that fits", () => { const result = allocateVenues(80, dataset().timeSlots[0], dataset().venues, [], new Set(), 15); expect(result.success).toBe(true); expect(result.venueAssignments.map((venue) => venue.venueId)).toEqual(["v1"]); });
+  it("rejects unavailable and colliding invigilators", () => { const data = dataset({ invigilators: [{ id: "i1", staffId: "I1", name: "I", active: true, maximumDailyAssignments: 2 }] }); const result = allocateInvigilators(data.timeSlots[0], ["v1"], data.invigilators, [{ resourceId: "i1", date: "2027-02-01", startTime: "08:00", endTime: "13:00" }], new Set(), new Map(), 1); expect(result.success).toBe(false); });
+  it("catches student, venue, and invigilator clashes", () => { const data = dataset(); const candidate = { ...emptyCandidate(), assignments: [{ courseId: "a", timeSlotId: "t1", venues: [{ venueId: "v1", allocatedCapacity: 100 }], invigilators: [{ invigilatorId: "i1" }] }, { courseId: "b", timeSlotId: "t1", venues: [{ venueId: "v1", allocatedCapacity: 100 }], invigilators: [{ invigilatorId: "i1" }] }] }; const codes = validateHardConstraints(candidate, data).map((violation) => violation.code); expect(codes).toEqual(expect.arrayContaining(["STUDENT_CLASH", "VENUE_CLASH", "INVIGILATOR_CLASH"])); });
+  it("catches venue unavailability and invalid time slots", () => { const data = dataset({ venueUnavailability: [{ resourceId: "v1", date: "2027-02-01", startTime: "08:00", endTime: "13:00" }] }); const candidate = { ...emptyCandidate(), assignments: [{ courseId: "a", timeSlotId: "missing", venues: [{ venueId: "v1", allocatedCapacity: 100 }], invigilators: [{ invigilatorId: "i1" }] }] }; const codes = validateHardConstraints(candidate, data).map((violation) => violation.code); expect(codes).toEqual(expect.arrayContaining(["INVALID_TIME_SLOT"])); });
+});
+
+describe("deterministic timetable generation", () => {
+  it("schedules conflict courses in separate slots and is reproducible", () => { const data = dataset(); const first = generateTimetable(data, { ...DEFAULT_ENGINE_CONFIG, maxGenerationAttempts: 1, seed: 7 }); const second = generateTimetable(data, { ...DEFAULT_ENGINE_CONFIG, maxGenerationAttempts: 1, seed: 7 }); expect(first).toEqual(second); expect(first.unscheduledCourses).toHaveLength(0); expect(validateTimetable(first, data).valid).toBe(true); expect(new Set(first.assignments.filter((assignment) => assignment.courseId === "a" || assignment.courseId === "b").map((assignment) => assignment.timeSlotId)).size).toBe(2); });
+  it("leaves a course unscheduled when all slots lack capacity", () => { const data = dataset({ venues: [{ id: "tiny", code: "T", name: "Tiny", capacity: 1, active: true }], invigilators: [{ id: "i1", staffId: "I1", name: "I", active: true, maximumDailyAssignments: 2 }] }); const result = generateTimetable(data, { maxGenerationAttempts: 1 }); expect(result.unscheduledCourses.length).toBeGreaterThan(0); expect(result.unscheduledCourses[0].reason).toBe("NO_FEASIBLE_SLOT"); });
+  it("reports back-to-back exams and penalizes venue waste", () => { const data = dataset(); const candidate = { ...emptyCandidate(), assignments: [{ courseId: "a", timeSlotId: "t1", venues: [{ venueId: "v2", allocatedCapacity: 300 }], invigilators: [{ invigilatorId: "i1" }] }, { courseId: "c", timeSlotId: "t2", venues: [{ venueId: "v2", allocatedCapacity: 300 }], invigilators: [{ invigilatorId: "i2" }] }] }; const metrics = calculateMetrics(candidate, data, DEFAULT_ENGINE_CONFIG); expect(metrics.studentBackToBackCount).toBeGreaterThan(0); expect(scoreTimetable(candidate, data, DEFAULT_ENGINE_CONFIG).penalty).toBeGreaterThan(0); });
+});
+
+describe("generation readiness", () => {
+  it("reports missing configuration as blockers", () => { const result = validateGenerationReadiness(dataset({ courses: [], registrations: [], timeSlots: [], venues: [], invigilators: [] })); expect(result.ready).toBe(false); expect(result.blockers.map((blocker) => blocker.code)).toEqual(expect.arrayContaining(["NO_COURSES", "NO_TIME_SLOTS", "NO_VENUES", "NO_INVIGILATORS", "NO_REGISTRATIONS"])); });
+});
