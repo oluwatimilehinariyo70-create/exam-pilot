@@ -1,0 +1,41 @@
+import { getConflictingEvents } from "../../exams";
+import { intervalsOverlap, makeInterval, timeToMinutes, type TimeInterval } from "../intervals";
+import { resourceUnavailable, slotDurationMinutes, venueEffectiveCapacity, venueSupports } from "./allocation";
+import type { AggregateCandidateTimetable, AggregateConstraintViolation, AggregateSchedulingDataset } from "./types";
+
+function intervalFor(assignment: AggregateCandidateTimetable["assignments"][number], dataset: AggregateSchedulingDataset): TimeInterval | null {
+  if (dataset.schedulingMode !== "FLEXIBLE_INTERVALS") {
+    const slot = dataset.timeSlots.find((item) => item.id === assignment.timeSlotId);
+    return slot ? makeInterval(slot.date, timeToMinutes(slot.startTime), timeToMinutes(slot.endTime)) : null;
+  }
+  return makeInterval(assignment.date, timeToMinutes(assignment.startTime), timeToMinutes(assignment.endTime));
+}
+
+function unavailable(interval: TimeInterval, resourceId: string, periods: AggregateSchedulingDataset["venueUnavailability"]) {
+  return periods.some((period) => { if (period.resourceId !== resourceId) return false; const blocked = makeInterval(period.date, timeToMinutes(period.startTime), timeToMinutes(period.endTime)); return blocked ? intervalsOverlap(interval, blocked) : false; });
+}
+
+export function validateAggregateTimetable(timetable: AggregateCandidateTimetable, dataset: AggregateSchedulingDataset): AggregateConstraintViolation[] {
+  const violations: AggregateConstraintViolation[] = []; const events = new Map(dataset.events.map((event) => [event.id, event])); const slots = new Map(dataset.timeSlots.map((slot) => [slot.id, slot])); const venues = new Map(dataset.venues.map((venue) => [venue.id, venue])); const invigilators = new Map(dataset.invigilators.map((item) => [item.id, item])); const assignmentIds = new Set<string>();
+  const fixedMode = dataset.schedulingMode !== "FLEXIBLE_INTERVALS";
+  for (const assignment of timetable.assignments) {
+    const event = events.get(assignment.eventId); const slot = assignment.timeSlotId ? slots.get(assignment.timeSlotId) : undefined; const interval = intervalFor(assignment, dataset);
+    if (assignmentIds.has(assignment.eventId)) violations.push({ code: "DUPLICATE_EVENT_ASSIGNMENT", message: "An event has more than one timetable assignment.", metadata: { eventId: assignment.eventId } }); assignmentIds.add(assignment.eventId);
+    if (!event) violations.push({ code: "INACTIVE_RESOURCE", message: "An assignment references a missing or inactive exam event.", metadata: { eventId: assignment.eventId } });
+    if (fixedMode && (!slot || slot.examPeriodId !== dataset.examPeriod.id)) violations.push({ code: "INVALID_TIME_SLOT", message: "Assignment uses a time slot outside the selected examination period.", metadata: { eventId: assignment.eventId, timeSlotId: assignment.timeSlotId } });
+    if (!fixedMode && !interval) violations.push({ code: "INVALID_INTERVAL", message: "Flexible assignment must contain a valid date, start time, and end time.", metadata: { eventId: assignment.eventId } });
+    if (!event || !interval) continue;
+    if (fixedMode && slot && slotDurationMinutes(slot) < event.durationMinutes) violations.push({ code: "EVENT_DURATION_EXCEEDS_SLOT", message: "The assigned fixed slot is shorter than the event duration.", metadata: { eventId: event.id } });
+    if (!fixedMode && interval.endMinutes - interval.startMinutes !== event.durationMinutes) violations.push({ code: "INVALID_INTERVAL_DURATION", message: "Flexible assignment duration must equal the event duration.", metadata: { eventId: event.id, expected: event.durationMinutes, actual: interval.endMinutes - interval.startMinutes } });
+    const assignedVenueIds = new Set<string>(); let totalCapacity = 0;
+    for (const venueAssignment of assignment.venues) {
+      if (assignedVenueIds.has(venueAssignment.venueId)) violations.push({ code: "VENUE_COLLISION", message: "An event assigns the same venue more than once.", metadata: { eventId: event.id, venueId: venueAssignment.venueId } }); assignedVenueIds.add(venueAssignment.venueId);
+      const venue = venues.get(venueAssignment.venueId); if (!venue || !venue.active) { violations.push({ code: "INACTIVE_RESOURCE", message: "An inactive or missing venue was assigned.", metadata: { eventId: event.id, venueId: venueAssignment.venueId } }); continue; }
+      if (!venueSupports(venue, event.examMode)) violations.push({ code: "VENUE_CAPABILITY_MISMATCH", message: "The venue capability does not support this examination mode.", metadata: { eventId: event.id, venueId: venue.id } }); const capacity = venueEffectiveCapacity(venue, event.examMode); totalCapacity += capacity; if (venueAssignment.allocatedCapacity > capacity) violations.push({ code: "INSUFFICIENT_VENUE_CAPACITY", message: "Allocated capacity exceeds the venue's effective capacity.", metadata: { eventId: event.id, venueId: venue.id } }); if (fixedMode && slot && resourceUnavailable(slot, venue.id, dataset.venueUnavailability)) violations.push({ code: "VENUE_UNAVAILABLE", message: "The assigned venue is unavailable during this slot.", metadata: { eventId: event.id, venueId: venue.id } }); if (!fixedMode && unavailable(interval, venue.id, dataset.venueUnavailability)) violations.push({ code: "VENUE_UNAVAILABLE", message: "The assigned venue is unavailable during this interval.", metadata: { eventId: event.id, venueId: venue.id } });
+    }
+    if (totalCapacity < event.candidateCount) violations.push({ code: event.examMode === "CBT" ? "INSUFFICIENT_CBT_CAPACITY" : "INSUFFICIENT_VENUE_CAPACITY", message: "Assigned venue capacity is below the event candidate count.", metadata: { eventId: event.id } });
+    const assignedInvigilatorIds = new Set<string>(); for (const item of assignment.invigilators) { if (assignedInvigilatorIds.has(item.invigilatorId)) violations.push({ code: "INVIGILATOR_COLLISION", message: "An event assigns the same invigilator more than once.", metadata: { eventId: event.id, invigilatorId: item.invigilatorId } }); assignedInvigilatorIds.add(item.invigilatorId); const invigilator = invigilators.get(item.invigilatorId); if (!invigilator || !invigilator.active) violations.push({ code: "INACTIVE_RESOURCE", message: "An inactive or missing invigilator was assigned.", metadata: { eventId: event.id, invigilatorId: item.invigilatorId } }); if (invigilator && ((fixedMode && slot && resourceUnavailable(slot, invigilator.id, dataset.invigilatorUnavailability)) || (!fixedMode && unavailable(interval, invigilator.id, dataset.invigilatorUnavailability)))) violations.push({ code: "INVIGILATOR_UNAVAILABLE", message: "The assigned invigilator is unavailable during this placement.", metadata: { eventId: event.id, invigilatorId: item.invigilatorId } }); }
+  }
+  for (let leftIndex = 0; leftIndex < timetable.assignments.length; leftIndex += 1) for (let rightIndex = leftIndex + 1; rightIndex < timetable.assignments.length; rightIndex += 1) { const left = timetable.assignments[leftIndex]; const right = timetable.assignments[rightIndex]; const leftInterval = intervalFor(left, dataset); const rightInterval = intervalFor(right, dataset); if (!leftInterval || !rightInterval || !intervalsOverlap(leftInterval, rightInterval)) continue; const edge = getConflictingEvents(dataset.conflictGraph, left.eventId).find((item) => item.eventAId === right.eventId || item.eventBId === right.eventId); if (edge?.hard) violations.push({ code: "EVENT_CONFLICT", message: "Hard-conflicting event assignments overlap.", metadata: { eventAId: left.eventId, eventBId: right.eventId, reasons: edge.reasons } }); for (const venue of left.venues) if (right.venues.some((item) => item.venueId === venue.venueId)) violations.push({ code: "VENUE_COLLISION", message: "A venue is assigned to overlapping examination events.", metadata: { venueId: venue.venueId, eventAId: left.eventId, eventBId: right.eventId } }); for (const invigilator of left.invigilators) if (right.invigilators.some((item) => item.invigilatorId === invigilator.invigilatorId)) violations.push({ code: "INVIGILATOR_COLLISION", message: "An invigilator is assigned to overlapping examination events.", metadata: { invigilatorId: invigilator.invigilatorId, eventAId: left.eventId, eventBId: right.eventId } }); }
+  return violations;
+}

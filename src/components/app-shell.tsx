@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BookOpen, CalendarDays, ClipboardList, Command, FileClock, GraduationCap, LayoutDashboard, Settings2, ShieldCheck, Users, Warehouse, Database } from "lucide-react";
+import { BookOpen, CalendarDays, ClipboardList, Command, FileClock, GraduationCap, LayoutDashboard, Settings2, ShieldAlert, ShieldCheck, Users, Warehouse, Database, FileSpreadsheet, Calculator } from "lucide-react";
 
 import { SignOutButton } from "@/components/sign-out-button";
 import { cn } from "@/lib/utils";
@@ -8,6 +8,10 @@ const navigation = [
   { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { label: "Academic setup", href: "/academic-setup", icon: GraduationCap },
   { label: "Examination data", href: "/examination-data", icon: Database },
+  { label: "Course Loads", href: "/exam-planning/course-loads", icon: FileSpreadsheet },
+  { label: "Aggregate Conflicts", href: "/exam-planning/conflicts", icon: ShieldAlert },
+  { label: "Exam Calendar", href: "/exam-planning/period", icon: CalendarDays },
+  { label: "CBT Planning", href: "/exam-planning/cbt", icon: Calculator },
   { label: "Courses", href: "/examination-data/courses", icon: BookOpen },
   { label: "Students", href: "/examination-data/students", icon: Users },
   { label: "Registrations", href: "/examination-data/registrations", icon: GraduationCap },

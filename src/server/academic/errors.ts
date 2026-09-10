@@ -41,7 +41,44 @@ export type AcademicErrorCode =
   | "TIMETABLE_NOT_EDITABLE"
   | "TIMETABLE_INVALID"
   | "WORKFLOW_TRANSITION_INVALID"
-  | "APPROVAL_BLOCKED";
+  | "APPROVAL_BLOCKED"
+  | "INVALID_CANDIDATE_COUNT"
+  | "INVALID_DURATION"
+  | "INVALID_COURSE_SEMESTER"
+  | "PROGRAMME_COURSE_REQUIRED"
+  | "INACTIVE_DEPENDENCY"
+  | "INVALID_LEVEL"
+  | "COURSE_OFFERING_EXISTS"
+  | "COURSE_OFFERING_NOT_FOUND"
+  | "EMPTY_SELECTION"
+  | "INVALID_EXAM_EVENT"
+  | "EXAM_EVENT_LOCKED"
+  | "EXAM_EVENT_NOT_FOUND"
+  | "MEMBERSHIP_NOT_FOUND"
+  | "INVALID_CONFLICT_PAIR"
+  | "EXAM_CONFLICT_EXISTS"
+  | "EXAM_CONFLICT_NOT_FOUND"
+  | "INVALID_SNAPSHOT"
+  | "GENERATION_NOT_FOUND"
+  | "SNAPSHOT_ALREADY_EXISTS"
+  | "CSV_UNKNOWN_DEPARTMENT"
+  | "CSV_DUPLICATE_OFFERING_ROW"
+  | "CSV_INVALID_MODE"
+  | "CSV_INVALID_LEVEL"
+  | "CSV_INVALID_CANDIDATE_COUNT"
+  | "CSV_INVALID_CREDIT_UNITS"
+  | "CSV_INVALID_DURATION"
+  | "CSV_UNKNOWN_OFFERING"
+  | "CSV_PREVIEW_MISMATCH"
+  | "CSV_EXISTING_OFFERING"
+  | "COURSE_LOAD_IMPORT_FAILED"
+  | "COURSE_LOAD_IMPORT_NOT_FOUND"
+  | "EXAM_EVENT_UNMERGE_UNAVAILABLE"
+  | "AGGREGATE_GENERATION_NOT_READY"
+  | "AGGREGATE_GENERATION_FAILED"
+  | "INVALID_CALENDAR_CONFIGURATION"
+  | "CALENDAR_DATE_OUTSIDE_PERIOD"
+  | "CALENDAR_ALREADY_REFERENCED";
 
 export class AcademicError extends Error {
   constructor(
@@ -65,6 +102,7 @@ export function toAcademicError(error: unknown): AcademicError {
   if (error instanceof Error && error.name === "AuthorizationError") {
     return new AcademicError("UNAUTHORIZED", error.message, {}, 403);
   }
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "P2034") return new AcademicError("TIMETABLE_NOT_EDITABLE", "Another request changed these records. Reload and retry.", {}, 409);
   if (isPrismaUniqueError(error)) {
     return new AcademicError("DATABASE_ERROR", "That record already exists.", {}, 409);
   }

@@ -12,3 +12,6 @@ export * from "./allocation/invigilators";
 export * from "./constraints/hard";
 export * from "./ordering/course-ordering";
 export * from "./validation/timetable-validator";
+export * from "./aggregate";
+export * from "./intervals";
+export * from "./planner";

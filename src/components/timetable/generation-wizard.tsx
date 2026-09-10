@@ -19,6 +19,8 @@ import {
 import { Button } from "@/components/ui/button";
 
 type Row = Record<string, any>;
+type GenerationMode = "LEGACY_REGISTRATION" | "AGGREGATE_EVENT";
+type SchedulingMode = "FIXED_SESSIONS" | "FLEXIBLE_INTERVALS";
 type Option = { value: string; label: string };
 
 function text(value: unknown) {
@@ -72,6 +74,8 @@ export function GenerationWizard({ role }: { role: string }) {
   const [periodId, setPeriodId] = useState("");
   const [attempts, setAttempts] = useState(30);
   const [seed, setSeed] = useState(2025);
+  const [generationMode, setGenerationMode] = useState<GenerationMode>("AGGREGATE_EVENT");
+  const [schedulingMode, setSchedulingMode] = useState<SchedulingMode>("FIXED_SESSIONS");
   const [phase, setPhase] = useState<"idle" | "checking" | "generating" | "loading">("idle");
   const [error, setError] = useState("");
   const [readiness, setReadiness] = useState<Row | null>(null);
@@ -134,7 +138,7 @@ export function GenerationWizard({ role }: { role: string }) {
     try {
       setPhase("checking");
       const readinessResponse = await fetch(
-        `/api/timetable/readiness?academicSessionId=${sessionId}&semesterId=${semesterId}&examPeriodId=${periodId}`,
+        `${generationMode === "AGGREGATE_EVENT" ? "/api/exams/generate/readiness" : "/api/timetable/readiness"}?academicSessionId=${sessionId}&semesterId=${semesterId}&examPeriodId=${periodId}&schedulingMode=${schedulingMode}`,
         { cache: "no-store" },
       );
       const readinessBody = await readinessResponse.json();
@@ -146,10 +150,10 @@ export function GenerationWizard({ role }: { role: string }) {
       }
 
       setPhase("generating");
-      const generationResponse = await fetch("/api/timetable/generate", {
+      const generationResponse = await fetch(generationMode === "AGGREGATE_EVENT" ? "/api/exams/generate" : "/api/timetable/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ academicSessionId: sessionId, semesterId, examPeriodId: periodId, attempts, seed }),
+        body: JSON.stringify({ academicSessionId: sessionId, semesterId, examPeriodId: periodId, attempts, seed, schedulingMode }),
       });
       const generationBody = await generationResponse.json();
       if (!generationResponse.ok) throw new Error(generationBody.error?.message ?? "Generation failed.");
@@ -188,8 +192,7 @@ export function GenerationWizard({ role }: { role: string }) {
               Select the input data, click Analyze, get the exam timetable.
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">
-              The engine reads registrations, courses, venues, invigilators, and time slots for the selected period,
-              then produces a printable schedule in one run.
+              Choose a fixed-session aggregate event run for collision resolution, or keep the legacy registration generator for existing workflows.
             </p>
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               <Signal icon={Database} label="Inputs" value="Academic data" />
@@ -204,6 +207,8 @@ export function GenerationWizard({ role }: { role: string }) {
               Input data
             </div>
             <div className="mt-5 space-y-4">
+              <label className="block text-sm font-semibold text-slate-700">Generation mode<select value={generationMode} onChange={(event) => { setGenerationMode(event.target.value as GenerationMode); resetOutput(); }} className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal outline-none focus:border-teal"><option value="AGGREGATE_EVENT">Aggregate event · collision resolution</option><option value="LEGACY_REGISTRATION">Legacy registration timetable</option></select></label>
+              {generationMode === "AGGREGATE_EVENT" && <label className="block text-sm font-semibold text-slate-700">Scheduling mode<select value={schedulingMode} onChange={(event) => { setSchedulingMode(event.target.value as SchedulingMode); resetOutput(); }} className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal outline-none focus:border-teal"><option value="FIXED_SESSIONS">Fixed sessions</option><option value="FLEXIBLE_INTERVALS">Flexible intervals</option></select></label>}
               <Select
                 label="Academic session"
                 value={sessionId}
@@ -291,14 +296,14 @@ export function GenerationWizard({ role }: { role: string }) {
           </section>
 
           <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            <Metric label="Scheduled courses" value={metrics?.scheduledCourses} />
-            <Metric label="Unscheduled" value={metrics?.unscheduledCourses} tone={Number(metrics?.unscheduledCourses ?? 0) ? "warn" : "good"} />
+            <Metric label={generationMode === "AGGREGATE_EVENT" ? "Scheduled events" : "Scheduled courses"} value={generationMode === "AGGREGATE_EVENT" ? metrics?.scheduledEvents : metrics?.scheduledCourses} />
+            <Metric label="Unscheduled" value={generationMode === "AGGREGATE_EVENT" ? metrics?.unscheduledEvents : metrics?.unscheduledCourses} tone={Number((generationMode === "AGGREGATE_EVENT" ? metrics?.unscheduledEvents : metrics?.unscheduledCourses) ?? 0) ? "warn" : "good"} />
             <Metric label="Candidates" value={metrics?.totalCandidates} />
             <Metric label="Hard violations" value={metrics?.hardViolationCount} tone={Number(metrics?.hardViolationCount ?? 0) ? "warn" : "good"} />
             <Metric label="Score" value={generation.score} />
           </section>
 
-          <TimetableSheet schedules={schedules} />
+          <TimetableSheet schedules={schedules} aggregate={generationMode === "AGGREGATE_EVENT"} />
         </>
       )}
     </div>
@@ -361,7 +366,7 @@ function ReadinessIssues({ readiness, blockers, warnings }: { readiness: Row; bl
         <div>
           <h2 className="font-bold text-navy">Input data needs attention</h2>
           <p className="mt-1 text-sm text-amber-800">
-            Courses: {num(summary?.courses)} · Students: {num(summary?.students)} · Registrations: {num(summary?.registrations)} · Time slots: {num(summary?.timeSlots)}
+            {summary?.events != null ? `Events: ${num(summary.events)} · Candidate workload: ${num(summary.candidateWorkload)} · ` : `Courses: ${num(summary?.courses)} · Students: ${num(summary?.students)} · Registrations: ${num(summary?.registrations)} · `}Time slots: {num(summary?.timeSlots)}
           </p>
         </div>
       </div>
@@ -387,11 +392,12 @@ function Metric({ label, value, tone = "neutral" }: { label: string; value: unkn
   );
 }
 
-function TimetableSheet({ schedules }: { schedules: Row[] }) {
+function TimetableSheet({ schedules, aggregate = false }: { schedules: Row[]; aggregate?: boolean }) {
   const grouped = new Map<string, Row[]>();
   schedules.forEach((schedule) => {
-    const slot = schedule.timeSlot as Row;
-    grouped.set(text(slot.date), [...(grouped.get(text(slot.date)) ?? []), schedule]);
+    const slot = schedule.timeSlot as Row | null;
+    const date = text(schedule.date ?? slot?.date);
+    grouped.set(date, [...(grouped.get(date) ?? []), schedule]);
   });
 
   if (!schedules.length) {
@@ -424,24 +430,21 @@ function TimetableSheet({ schedules }: { schedules: Row[] }) {
                     <th className="border border-slate-200 px-3 py-3">Time</th>
                     <th className="border border-slate-200 px-3 py-3">Course code</th>
                     <th className="border border-slate-200 px-3 py-3">Course title</th>
-                    <th className="border border-slate-200 px-3 py-3">Population</th>
-                    <th className="border border-slate-200 px-3 py-3">Venue</th>
-                    <th className="border border-slate-200 px-3 py-3">Invigilators</th>
+                    {!aggregate && <><th className="border border-slate-200 px-3 py-3">Population</th><th className="border border-slate-200 px-3 py-3">Venue</th><th className="border border-slate-200 px-3 py-3">Invigilators</th></>}
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((schedule) => {
-                    const slot = schedule.timeSlot as Row;
+                    const slot = schedule.timeSlot as Row | null;
                     const course = schedule.course as Row;
+                    const event = (schedule.eventSummary ?? schedule.event) as Row;
                     return (
                       <tr key={text(schedule.id)} className="align-top">
-                        <td className="border border-slate-200 px-3 py-3 font-semibold text-slate-600">{formatShortDate(slot.date)}</td>
-                        <td className="border border-slate-200 px-3 py-3 text-slate-600">{text(slot.startTime)} - {text(slot.endTime)}</td>
-                        <td className="border border-slate-200 px-3 py-3 font-bold text-navy">{text(course.code)}</td>
-                        <td className="border border-slate-200 px-3 py-3 text-slate-600">{text(course.title)}</td>
-                        <td className="border border-slate-200 px-3 py-3 font-semibold text-slate-700">{num(schedule.candidateCount)}</td>
-                        <td className="border border-slate-200 px-3 py-3 font-semibold text-slate-700">{venueNames(schedule)}</td>
-                        <td className="border border-slate-200 px-3 py-3 text-slate-600">{invigilatorNames(schedule)}</td>
+                        <td className="border border-slate-200 px-3 py-3 font-semibold text-slate-600">{formatShortDate(schedule.date ?? slot?.date)}</td>
+                        <td className="border border-slate-200 px-3 py-3 text-slate-600">{text(schedule.startTime ?? slot?.startTime)} - {text(schedule.endTime ?? slot?.endTime)}</td>
+                        <td className="border border-slate-200 px-3 py-3 font-bold text-navy">{aggregate ? text(event?.title ?? schedule.eventId) : text(course?.code)}</td>
+                        <td className="border border-slate-200 px-3 py-3 text-slate-600">{aggregate ? text(event?.examMode) : text(course?.title)}</td>
+                        {!aggregate && <><td className="border border-slate-200 px-3 py-3 font-semibold text-slate-700">{num(schedule.candidateCount)}</td><td className="border border-slate-200 px-3 py-3 font-semibold text-slate-700">{venueNames(schedule)}</td><td className="border border-slate-200 px-3 py-3 text-slate-600">{invigilatorNames(schedule)}</td></>}
                       </tr>
                     );
                   })}

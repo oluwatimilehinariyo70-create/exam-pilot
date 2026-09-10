@@ -22,3 +22,11 @@ body {
   background: #cdebed;
   color: #10243e;
 }
+
+@media print {
+  @page { size: A4 landscape; margin: 12mm; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  body { background: white; color: black; }
+  table { font-size: 9pt; width: 100%; }
+}

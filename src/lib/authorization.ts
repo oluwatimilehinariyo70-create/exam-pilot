@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 
+import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { type Role } from "@/lib/roles";
 
@@ -13,7 +14,10 @@ export class AuthorizationError extends Error {
 }
 
 export async function getCurrentSession() {
-  return auth.api.getSession({ headers: await headers() });
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session?.user) return null;
+  const current = await prisma.user.findUnique({ where: { id: session.user.id }, select: { active: true, role: true } });
+  return current?.active ? { ...session, user: { ...session.user, role: current.role } } : null;
 }
 
 export async function requireUser() {

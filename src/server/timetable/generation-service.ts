@@ -43,7 +43,7 @@ export async function generateAndPersistTimetable(input: GenerationRequest, acto
 }
 
 export async function listGenerationHistory(sessionId?: string, semesterId?: string, examPeriodId?: string) {
-  return prisma.timetableGeneration.findMany({ where: { ...(sessionId ? { sessionId } : {}), ...(semesterId ? { semesterId } : {}), ...(examPeriodId ? { periodId: examPeriodId } : {}) }, include: { session: { select: { name: true } }, semester: { select: { name: true } }, period: { select: { name: true } }, generator: { select: { id: true, name: true } }, schedules: { select: { id: true } } }, orderBy: { generatedAt: "desc" }, take: 100 });
+  return prisma.timetableGeneration.findMany({ where: { ...(sessionId ? { sessionId } : {}), ...(semesterId ? { semesterId } : {}), ...(examPeriodId ? { periodId: examPeriodId } : {}) }, include: { session: { select: { name: true } }, semester: { select: { name: true } }, period: { select: { name: true } }, generator: { select: { id: true, name: true } }, schedules: { select: { id: true } }, aggregateSchedules: { select: { id: true } } }, orderBy: { generatedAt: "desc" }, take: 100 });
 }
 
 export function candidateSummary(candidate: CandidateTimetable | null) { return candidate ? { assignments: candidate.assignments.length, unscheduledCourses: candidate.unscheduledCourses, hardViolations: candidate.hardViolations, softScore: candidate.softScore, metrics: candidate.metrics } : null; }

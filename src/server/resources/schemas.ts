@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canonicalCourseCodeKey, normalizeCourseDisplayCode } from "@/domain/exams/identity";
 
 const id = z.string().trim().min(1);
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value, "Enter a real calendar date.");
@@ -44,8 +45,8 @@ export type InvigilatorInput = z.infer<typeof invigilatorInput>;
 export type ImportRequest = z.infer<typeof importRequest>;
 export type ImportConfirmRequest = z.infer<typeof importConfirmRequest>;
 
-export function normalizeCourseCode(value: string) { return value.trim().replace(/\s+/g, " ").toUpperCase(); }
-export function courseCodeKey(value: string) { return normalizeCourseCode(value).replace(/[^A-Z0-9]/g, ""); }
+export function normalizeCourseCode(value: string) { return normalizeCourseDisplayCode(value); }
+export function courseCodeKey(value: string) { return canonicalCourseCodeKey(value); }
 export function normalizeMatricNumber(value: string) { return value.trim(); }
 export function dateValue(value: string) { return new Date(`${value}T00:00:00.000Z`); }
 export function timeToMinutes(value: string) { const [hours, minutes] = value.split(":").map(Number); return hours * 60 + minutes; }

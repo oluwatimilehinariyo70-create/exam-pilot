@@ -4,8 +4,8 @@ export const REQUIRED_IMPORT_HEADERS = ["matric_number", "student_name", "progra
 
 export type CsvRecord = { rowNumber: number; values: Record<string, string> };
 
-export function parseCsv(text: string): { headers: string[]; rows: CsvRecord[] } {
-  if (text.length > 10_000_000) throw new AcademicError("CSV_TOO_LARGE", "CSV files must be smaller than 10 MB.", {}, 413);
+export function parseCsv(text: string, requiredHeaders: readonly string[] = REQUIRED_IMPORT_HEADERS, maxLength = 10_000_000): { headers: string[]; rows: CsvRecord[] } {
+  if (text.length > maxLength) throw new AcademicError("CSV_TOO_LARGE", `CSV files must be smaller than ${Math.round(maxLength / 1_000_000)} MB.`, {}, 413);
   const records: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -19,7 +19,7 @@ export function parseCsv(text: string): { headers: string[]; rows: CsvRecord[] }
   if (quoted) throw new AcademicError("CSV_INVALID_ROW", "The CSV contains an unclosed quoted value.");
   if (cell.length || row.length) { row.push(cell.trim()); records.push(row); }
   const headers = (records.shift() ?? []).map((value) => value.replace(/^\uFEFF/, "").trim().toLowerCase());
-  const missing = REQUIRED_IMPORT_HEADERS.filter((header) => !headers.includes(header));
+  const missing = requiredHeaders.filter((header) => !headers.includes(header));
   if (missing.length) throw new AcademicError("CSV_INVALID_HEADERS", `Missing required CSV headers: ${missing.join(", ")}.`, { missing });
   return { headers, rows: records.filter((values) => values.some(Boolean)).map((values, index) => ({ rowNumber: index + 2, values: Object.fromEntries(headers.map((header, headerIndex) => [header, (values[headerIndex] ?? "").trim()]) ) })) };
 }

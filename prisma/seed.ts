@@ -85,6 +85,12 @@ async function main() {
     create: { departmentId: physics.id, code: "BSC-PHY", name: "B.Sc. Physics" },
   });
 
+  const mathematicsProgramme = await prisma.programme.upsert({
+    where: { departmentId_code: { departmentId: mathematics.id, code: "BSC-MTH" } },
+    update: { active: true },
+    create: { departmentId: mathematics.id, code: "BSC-MTH", name: "B.Sc. Mathematics" },
+  });
+
   const chemistryProgramme = await prisma.programme.upsert({
     where: { departmentId_code: { departmentId: chemistry.id, code: "BSC-CHM" } },
     update: { active: true },
@@ -129,6 +135,44 @@ async function main() {
 
   await prisma.programmeCourse.createMany({
     data: courses.map((course) => ({ programmeId: programme.id, courseId: course.id })),
+    skipDuplicates: true,
+  });
+
+  const aggregateCourses = await Promise.all([
+    prisma.course.upsert({
+      where: { semesterId_normalizedCode: { semesterId: semester.id, normalizedCode: "PHY202" } },
+      update: { code: "PHY 202", title: "General Physics II", creditUnits: 3, defaultExamMode: "PEN_ON_PAPER", defaultDurationMinutes: 180, active: true },
+      create: { semesterId: semester.id, departmentId: physics.id, code: "PHY 202", normalizedCode: "PHY202", title: "General Physics II", creditUnits: 3, level: 200, estimatedStudentCount: 200, defaultExamMode: "PEN_ON_PAPER", defaultDurationMinutes: 180 },
+    }),
+    prisma.course.upsert({
+      where: { semesterId_normalizedCode: { semesterId: semester.id, normalizedCode: "CSC202" } },
+      update: { code: "CSC 202", title: "Data Structures", creditUnits: 3, defaultExamMode: "PEN_ON_PAPER", defaultDurationMinutes: 180, active: true },
+      create: { semesterId: semester.id, departmentId: computerScience.id, code: "CSC 202", normalizedCode: "CSC202", title: "Data Structures", creditUnits: 3, level: 200, estimatedStudentCount: 180, defaultExamMode: "PEN_ON_PAPER", defaultDurationMinutes: 180 },
+    }),
+    prisma.course.upsert({
+      where: { semesterId_normalizedCode: { semesterId: semester.id, normalizedCode: "MTH202" } },
+      update: { code: "MTH 202", title: "Linear Algebra", creditUnits: 3, defaultExamMode: "PEN_ON_PAPER", defaultDurationMinutes: 180, active: true },
+      create: { semesterId: semester.id, departmentId: mathematics.id, code: "MTH 202", normalizedCode: "MTH202", title: "Linear Algebra", creditUnits: 3, level: 200, estimatedStudentCount: 120, defaultExamMode: "PEN_ON_PAPER", defaultDurationMinutes: 180 },
+    }),
+  ]);
+
+  await prisma.programmeCourse.createMany({
+    data: [
+      { programmeId: programme.id, courseId: aggregateCourses[0].id },
+      { programmeId: mathematicsProgramme.id, courseId: aggregateCourses[0].id },
+      { programmeId: programme.id, courseId: aggregateCourses[1].id },
+      { programmeId: mathematicsProgramme.id, courseId: aggregateCourses[2].id },
+    ],
+    skipDuplicates: true,
+  });
+
+  await prisma.courseOffering.createMany({
+    data: [
+      { academicSessionId: session.id, semesterId: semester.id, courseId: aggregateCourses[0].id, programmeId: programme.id, level: 200, candidateCount: 150, source: "LEGACY_DERIVED" },
+      { academicSessionId: session.id, semesterId: semester.id, courseId: aggregateCourses[0].id, programmeId: mathematicsProgramme.id, level: 200, candidateCount: 50, source: "MANUAL" },
+      { academicSessionId: session.id, semesterId: semester.id, courseId: aggregateCourses[1].id, programmeId: programme.id, level: 200, candidateCount: 180, source: "MANUAL" },
+      { academicSessionId: session.id, semesterId: semester.id, courseId: aggregateCourses[2].id, programmeId: mathematicsProgramme.id, level: 200, candidateCount: 120, source: "MANUAL" },
+    ],
     skipDuplicates: true,
   });
 
@@ -188,6 +232,26 @@ async function main() {
     ],
     skipDuplicates: true,
   });
+
+  const knownVenues = [
+    { code: "LLT-1", name: "LLT 1", capacity: 170, examCapacity: 170, capability: "WRITTEN" as const },
+    { code: "NAVATES-2", name: "Navates 2", capacity: 100, examCapacity: 100, capability: "WRITTEN" as const },
+    { code: "CAFE", name: "CAFE", capacity: 180, examCapacity: 180, capability: "WRITTEN" as const },
+    { code: "OLD-LT", name: "Old LT", capacity: 170, examCapacity: 170, capability: "WRITTEN" as const },
+    { code: "AUDITORIUM", name: "Auditorium", capacity: 120, examCapacity: 120, capability: "WRITTEN" as const },
+    { code: "NSC", name: "NSC", capacity: 180, examCapacity: 180, capability: "WRITTEN" as const },
+    { code: "PRE-DEGREE", name: "Pre-Degree", capacity: 200, examCapacity: 200, capability: "WRITTEN" as const },
+    { code: "SCIENCE-COMPLEX", name: "Science Complex", capacity: 95, examCapacity: 95, capability: "WRITTEN" as const },
+    { code: "UCRC", name: "UCRC", capacity: 250, computerCapacity: 250, usableComputerCapacity: 250, capability: "CBT" as const },
+    { code: "LIBRARY-ICT", name: "Library ICT", capacity: 100, computerCapacity: 100, usableComputerCapacity: 100, capability: "CBT" as const },
+  ];
+  for (const venue of knownVenues) {
+    await prisma.venue.upsert({
+      where: { code: venue.code },
+      update: venue,
+      create: venue,
+    });
+  }
 
   await prisma.invigilator.createMany({
     data: [
