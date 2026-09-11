@@ -30,7 +30,7 @@ export function regenerateAggregateEvents(dataset: AggregateSchedulingDataset, p
       const result = scheduleCbtEvent(event, dataset, candidate, dataset.config);
       if (!result.violation) { candidate.sittings.push(...result.sittings); placed = true; }
     } else {
-      const reservedVenues: AggregateUnavailablePeriod[] = [], reservedStaff: AggregateUnavailablePeriod[] = [];
+      const reservedVenues: AggregateUnavailablePeriod[] = [], reservedStaff: AggregateUnavailablePeriod[] = [], initialVenueUsage: NonNullable<AggregateSchedulingDataset["initialVenueUsage"]> = [];
       const rows = [...candidate.assignments.map((a) => ({ ...a, staffIds: a.invigilators.map((i) => i.invigilatorId) })), ...candidate.sittings.map((s) => ({ ...s, staffIds: s.staff.map((i) => i.staffId) }))];
       const daily = new Map<string, number>(), total = new Map<string, number>();
       for (const row of rows) {
@@ -39,12 +39,13 @@ export function regenerateAggregateEvents(dataset: AggregateSchedulingDataset, p
         const before = dayOverride ?? dataset.timePolicy?.writtenTurnaroundMinutes ?? 30;
         const after = dayOverride ?? (otherMode === "CBT" ? dataset.timePolicy?.cbtTurnaroundMinutes ?? 15 : dataset.timePolicy?.writtenTurnaroundMinutes ?? 30);
         const hardConflict = dataset.conflictGraph.edges.some((e) => e.hard && ((e.eventAId === event.id && e.eventBId === row.eventId) || (e.eventBId === event.id && e.eventAId === row.eventId)));
-        for (const venue of row.venues) reservedVenues.push({ resourceId: venue.venueId, date: row.date, startTime: minutesToTime(Math.max(0, timeToMinutes(row.startTime) - (dataset.schedulingMode === "FLEXIBLE_INTERVALS" ? 0 : before)))!, endTime: minutesToTime(Math.min(1439, timeToMinutes(row.endTime) + after))! });
+        let remainingCandidates = dataset.events.find((item) => item.id === row.eventId)?.candidateCount ?? ("candidateCount" in row ? row.candidateCount : 0);
+        for (const venue of row.venues) { const allocatedCandidates = venue.allocatedCandidates ?? Math.min(venue.allocatedCapacity, remainingCandidates); remainingCandidates = Math.max(0, remainingCandidates - allocatedCandidates); initialVenueUsage.push({ slotId: "timeSlotId" in row ? row.timeSlotId ?? undefined : undefined, venueId: venue.venueId, date: row.date, startTime: row.startTime, endTime: row.endTime, allocatedCandidates, turnaroundMinutes: after }); }
         if (hardConflict) for (const venue of dataset.venues) reservedVenues.push({ resourceId: venue.id, date: row.date, startTime: row.startTime, endTime: row.endTime });
         for (const id of row.staffIds) { reservedStaff.push({ resourceId: id, date: row.date, startTime: row.startTime, endTime: row.endTime }); daily.set(id + "|" + row.date, (daily.get(id + "|" + row.date) ?? 0) + 1); total.set(id, (total.get(id) ?? 0) + 1); }
       }
       for (const person of dataset.invigilators) for (const date of new Set([...dataset.timeSlots.map((s) => s.date), ...(dataset.calendarDays ?? []).map((d) => d.date)])) if ((daily.get(person.id + "|" + date) ?? 0) >= person.maximumDailyAssignments || (person.maximumTotalAssignments != null && (total.get(person.id) ?? 0) >= person.maximumTotalAssignments)) reservedStaff.push({ resourceId: person.id, date, startTime: "00:00", endTime: "23:59" });
-      const input = { ...dataset, events: [event], venueUnavailability: [...dataset.venueUnavailability, ...reservedVenues], invigilatorUnavailability: [...dataset.invigilatorUnavailability, ...reservedStaff] };
+      const input = { ...dataset, events: [event], initialVenueUsage, venueUnavailability: [...dataset.venueUnavailability, ...reservedVenues], invigilatorUnavailability: [...dataset.invigilatorUnavailability, ...reservedStaff] };
       const result = dataset.schedulingMode === "FLEXIBLE_INTERVALS" ? generateFlexibleAggregateTimetable(input, dataset.config) : generateAggregateTimetable(input, dataset.config);
       if (result.assignments.length) { candidate.assignments.push(...result.assignments); placed = true; }
     }

@@ -20,7 +20,7 @@ export function publicTimetableData(candidate: AggregateCandidateTimetable, data
   for (const a of candidate.assignments) {
     const slot = dataset.timeSlots.find((s) => s.id === a.timeSlotId);
     let remaining = dataset.events.find((e) => e.id === a.eventId)?.candidateCount ?? 0;
-    for (const v of a.venues) { const count = Math.min(remaining, v.allocatedCapacity); remaining -= count; add(a.eventId,slot?.date ?? a.date,slot?.startTime ?? a.startTime,slot?.endTime ?? a.endTime,v.venueId,count,null); }
+    for (const v of a.venues) { const count = Math.min(remaining, v.allocatedCandidates ?? v.allocatedCapacity); remaining -= count; add(a.eventId,slot?.date ?? a.date,slot?.startTime ?? a.startTime,slot?.endTime ?? a.endTime,v.venueId,count,null); }
   }
   for (const s of candidate.sittings ?? []) for (const v of s.venues) add(s.eventId,s.date,s.startTime,s.endTime,v.venueId,v.allocatedCandidates,s.sequenceNumber);
   rows.sort((a,b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime) || a.courseCode.localeCompare(b.courseCode) || a.venue.localeCompare(b.venue));

@@ -63,9 +63,12 @@ export type AggregateSchedulingDataset = {
   config: AggregateGenerationConfig;
   cbtBatchingPolicy?: CbtBatchingPolicy;
   cbtStaffingPolicy?: CbtStaffingPolicy;
+  /** Existing assignments supplied by regeneration so halls can share residual seats. */
+  initialVenueUsage?: { slotId?: string; venueId: string; date: string; startTime: string; endTime: string; allocatedCandidates: number; turnaroundMinutes?: number }[];
 };
 
-export type AggregateVenueAssignment = { venueId: string; allocatedCapacity: number };
+/** A venue row carries both the room's effective capacity and this event's exact seat allocation. */
+export type AggregateVenueAssignment = { venueId: string; allocatedCapacity: number; allocatedCandidates?: number | null };
 export type AggregateInvigilatorAssignment = { invigilatorId: string; venueId?: string };
 export type AggregateExamAssignment = { eventId: string; timeSlotId: string | null; date: string; startTime: string; endTime: string; venues: AggregateVenueAssignment[]; invigilators: AggregateInvigilatorAssignment[] };
 export type AggregateConstraintViolation = { code: string; message: string; metadata: Record<string, unknown> };

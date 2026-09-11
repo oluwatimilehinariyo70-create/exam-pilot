@@ -13,23 +13,52 @@ export function venueSupports(venue: AggregateVenue, mode: AggregateExamMode) {
   return mode === "CBT" ? venue.capability === "CBT" || venue.capability === "BOTH" : venue.capability === "WRITTEN" || venue.capability === "BOTH";
 }
 
-export function allocateAggregateVenues(candidateCount: number, mode: AggregateExamMode, slot: AggregateTimeSlot, venues: AggregateVenue[], unavailable: AggregateUnavailablePeriod[], occupied: Set<string>, splitPenalty: number): AggregateVenueAllocation {
+type VenueUsage = Map<string, number> | Set<string>;
+
+function usageFor(occupied: VenueUsage, venueId: string, capacity: number) {
+  return occupied instanceof Map ? Math.max(0, occupied.get(venueId) ?? 0) : occupied.has(venueId) ? capacity : 0;
+}
+
+/** Select the smallest deterministic set of halls and pack only the seats this event needs. */
+export function packAggregateVenueCapacity(candidateCount: number, options: { venueId: string; code: string; capacity: number; used: number }[], splitPenalty = 0): AggregateVenueAssignment[] | null {
+  const usable = options.filter((item) => item.capacity - item.used > 0);
+  if (!candidateCount) return [];
+  if (usable.reduce((sum, item) => sum + item.capacity - item.used, 0) < candidateCount) return null;
+  const sets: typeof usable[] = [];
+  const visit = (start: number, selected: typeof usable) => {
+    if (selected.length) {
+      const total = selected.reduce((sum, item) => sum + item.capacity - item.used, 0);
+      if (total >= candidateCount) sets.push(selected);
+    }
+    for (let index = start; index < usable.length; index += 1) visit(index + 1, [...selected, usable[index]]);
+  };
+  visit(0, []);
+  const best = sets.sort((left, right) => {
+    const leftCapacity = left.reduce((sum, item) => sum + item.capacity - item.used, 0);
+    const rightCapacity = right.reduce((sum, item) => sum + item.capacity - item.used, 0);
+    const leftOpen = left.filter((item) => item.used > 0).length;
+    const rightOpen = right.filter((item) => item.used > 0).length;
+    return left.length - right.length || rightOpen - leftOpen || (leftCapacity - candidateCount + Math.max(0, left.length - 1) * splitPenalty) - (rightCapacity - candidateCount + Math.max(0, right.length - 1) * splitPenalty) || left.map((item) => item.venueId).sort().join().localeCompare(right.map((item) => item.venueId).sort().join());
+  })[0];
+  if (!best) return null;
+  let remaining = candidateCount;
+  return best.slice().sort((left, right) => Number(right.used > 0) - Number(left.used > 0) || (right.capacity - right.used) - (left.capacity - left.used) || left.code.localeCompare(right.code) || left.venueId.localeCompare(right.venueId)).map((item) => {
+    const assigned = Math.min(remaining, item.capacity - item.used); remaining -= assigned;
+    return { venueId: item.venueId, allocatedCapacity: item.capacity, allocatedCandidates: assigned };
+  });
+}
+
+export function allocateAggregateVenues(candidateCount: number, mode: AggregateExamMode, slot: AggregateTimeSlot, venues: AggregateVenue[], unavailable: AggregateUnavailablePeriod[], occupied: VenueUsage, splitPenalty: number): AggregateVenueAllocation {
   const compatible = venues.filter((venue) => venue.active && venueSupports(venue, mode) && venueEffectiveCapacity(venue, mode) > 0);
   if (!compatible.length) return { success: false, venueAssignments: [], totalCapacity: 0, candidateCount, unusedCapacity: 0, failureCode: "VENUE_CAPABILITY_MISMATCH", failureReason: mode === "CBT" ? "No active CBT-capable venue has usable computer capacity." : "No active written-capable venue is available." };
-  const available = compatible.filter((venue) => !occupied.has(venue.id) && !resourceUnavailable(slot, venue.id, unavailable));
+  const available = compatible.filter((venue) => !resourceUnavailable(slot, venue.id, unavailable));
+  const options = available.map((venue) => ({ venue, capacity: venueEffectiveCapacity(venue, mode), used: usageFor(occupied, venue.id, venueEffectiveCapacity(venue, mode)) })).filter((item) => item.capacity - item.used > 0);
   if (!available.length) {
-    const allOccupied = compatible.every((venue) => occupied.has(venue.id));
+    const allOccupied = compatible.every((venue) => usageFor(occupied, venue.id, venueEffectiveCapacity(venue, mode)) >= venueEffectiveCapacity(venue, mode));
     return { success: false, venueAssignments: [], totalCapacity: 0, candidateCount, unusedCapacity: 0, failureCode: allOccupied ? "VENUE_COLLISION" : "VENUE_UNAVAILABLE", failureReason: allOccupied ? "All compatible venues are occupied in this slot." : "Compatible venues are unavailable in this slot." };
   }
-  if (available.reduce((sum, venue) => sum + venueEffectiveCapacity(venue, mode), 0) < candidateCount) return { success: false, venueAssignments: [], totalCapacity: 0, candidateCount, unusedCapacity: 0, failureCode: mode === "CBT" ? "INSUFFICIENT_CBT_CAPACITY" : "INSUFFICIENT_VENUE_CAPACITY", failureReason: "The simultaneously available compatible capacity is insufficient." };
-  const capacity = (venue: AggregateVenue) => venueEffectiveCapacity(venue, mode);
-  const candidates: AggregateVenueAssignment[][] = [];
-  const single = available.find((venue) => capacity(venue) >= candidateCount); if (single) candidates.push([{ venueId: single.id, allocatedCapacity: capacity(single) }]);
-  const greedy: AggregateVenueAssignment[] = []; let greedyCapacity = 0;
-  for (const venue of [...available].sort((a, b) => capacity(b) - capacity(a) || a.code.localeCompare(b.code))) { if (greedyCapacity >= candidateCount) break; greedy.push({ venueId: venue.id, allocatedCapacity: capacity(venue) }); greedyCapacity += capacity(venue); }
-  candidates.push(greedy);
-  for (let left = 0; left < available.length; left += 1) for (let right = left + 1; right < available.length; right += 1) if (capacity(available[left]) + capacity(available[right]) >= candidateCount) candidates.push([{ venueId: available[left].id, allocatedCapacity: capacity(available[left]) }, { venueId: available[right].id, allocatedCapacity: capacity(available[right]) }]);
-  const selected = candidates.filter((set) => set.reduce((sum, venue) => sum + venue.allocatedCapacity, 0) >= candidateCount).sort((a, b) => (a.reduce((sum, venue) => sum + venue.allocatedCapacity, 0) - candidateCount + (a.length - 1) * splitPenalty) - (b.reduce((sum, venue) => sum + venue.allocatedCapacity, 0) - candidateCount + (b.length - 1) * splitPenalty) || a.map((venue) => venue.venueId).join().localeCompare(b.map((venue) => venue.venueId).join()))[0];
+  const selected = packAggregateVenueCapacity(candidateCount, options.map(({ venue, capacity, used }) => ({ venueId: venue.id, code: venue.code, capacity, used })), splitPenalty);
+  if (!selected) return { success: false, venueAssignments: [], totalCapacity: 0, candidateCount, unusedCapacity: 0, failureCode: mode === "CBT" ? "INSUFFICIENT_CBT_CAPACITY" : "INSUFFICIENT_VENUE_CAPACITY", failureReason: "The simultaneously available compatible capacity is insufficient." };
   const totalCapacity = selected.reduce((sum, venue) => sum + venue.allocatedCapacity, 0);
   return { success: true, venueAssignments: selected, totalCapacity, candidateCount, unusedCapacity: totalCapacity - candidateCount };
 }

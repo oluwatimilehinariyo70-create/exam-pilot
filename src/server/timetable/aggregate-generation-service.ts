@@ -91,7 +91,7 @@ export async function generateAndPersistAggregateTimetable(input: GenerationRequ
     const saved = await prisma.$transaction(async (db) => {
       for (const assignment of candidate.assignments) {
         const schedule = await db.aggregateExamSchedule.create({ data: { generationId: generation.id, eventId: assignment.eventId, timeSlotId: assignment.timeSlotId, date: input.schedulingMode === "FLEXIBLE_INTERVALS" ? new Date(`${assignment.date}T00:00:00.000Z`) : null, startTime: assignment.startTime, endTime: assignment.endTime, schedulingMode: input.schedulingMode, status: "GENERATED", generatedBy: actorId } });
-        if (assignment.venues.length) await db.aggregateExamVenueAssignment.createMany({ data: assignment.venues.map((venue) => ({ aggregateScheduleId: schedule.id, venueId: venue.venueId, allocatedCapacity: venue.allocatedCapacity })) });
+        if (assignment.venues.length) await db.aggregateExamVenueAssignment.createMany({ data: assignment.venues.map((venue) => ({ aggregateScheduleId: schedule.id, venueId: venue.venueId, allocatedCapacity: venue.allocatedCapacity, allocatedCandidates: venue.allocatedCandidates ?? undefined })) });
         if (assignment.invigilators.length) await db.aggregateInvigilationAssignment.createMany({ data: assignment.invigilators.map((item) => ({ aggregateScheduleId: schedule.id, invigilatorId: item.invigilatorId, venueId: item.venueId ?? null })) });
       }
       for (const sitting of candidate.sittings ?? []) {

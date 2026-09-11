@@ -36,7 +36,7 @@ export function validateCompleteAggregateTimetable(candidate: AggregateCandidate
     const bi = makeInterval(b.date, timeToMinutes(b.startTime), timeToMinutes(b.endTime));
     if (!ai || !bi) continue;
     const metadata = { eventAId: a.eventId, eventBId: b.eventId };
-    if (a.venues.some((v) => b.venues.some((w) => v.venueId === w.venueId)) && intervalsOverlap({ ...ai, endMinutes: ai.endMinutes + turnaround(a) }, { ...bi, endMinutes: bi.endMinutes + turnaround(b) })) violations.push({ code: "VENUE_TURNAROUND", message: "Venue examinations must allow the configured turnaround.", metadata });
+    if (a.venues.some((v) => b.venues.some((w) => v.venueId === w.venueId)) && !intervalsOverlap(ai, bi) && intervalsOverlap({ ...ai, endMinutes: ai.endMinutes + turnaround(a) }, { ...bi, endMinutes: bi.endMinutes + turnaround(b) })) violations.push({ code: "VENUE_TURNAROUND", message: "Venue examinations must allow the configured turnaround.", metadata });
     if (!intervalsOverlap(ai, bi)) continue;
     if (a.staffIds.some((id) => b.staffIds.includes(id))) violations.push({ code: "INVIGILATOR_COLLISION", message: "Staff cannot cover overlapping examinations.", metadata });
     if (dataset.conflictGraph.edges.some((e) => e.hard && ((e.eventAId === a.eventId && e.eventBId === b.eventId) || (e.eventBId === a.eventId && e.eventAId === b.eventId)))) violations.push({ code: "EVENT_CONFLICT", message: "Hard-conflicting examinations overlap.", metadata });

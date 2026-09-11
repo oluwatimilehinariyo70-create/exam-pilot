@@ -497,10 +497,11 @@ model ExamSittingStaffAssignment {
   @@index([staffId])
 }
 
-model AggregateExamVenueAssignment {
-  aggregateScheduleId String
-  venueId             String
-  allocatedCapacity   Int
+  model AggregateExamVenueAssignment {
+    aggregateScheduleId String
+    venueId             String
+    allocatedCapacity   Int
+    allocatedCandidates Int?
   aggregateSchedule   AggregateExamSchedule @relation(fields: [aggregateScheduleId], references: [id], onDelete: Cascade)
   venue               Venue                 @relation(fields: [venueId], references: [id], onDelete: Restrict)
 

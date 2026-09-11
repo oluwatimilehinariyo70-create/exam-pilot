@@ -32,10 +32,10 @@ function asCandidate(generation: { schedules: Array<{ courseId: string; timeSlot
   return { assignments: generation.schedules.map((schedule) => ({ courseId: schedule.courseId, timeSlotId: schedule.timeSlotId, venues: schedule.venues.map((venue) => ({ venueId: venue.venueId, allocatedCapacity: venue.allocatedCapacity })), invigilators: schedule.invigilators.map((invigilator) => ({ invigilatorId: invigilator.invigilatorId, venueId: invigilator.venueId ?? undefined })) })), unscheduledCourses: Array.isArray(metadata.unscheduledCourses) ? metadata.unscheduledCourses as CandidateTimetable["unscheduledCourses"] : [], hardViolations: Array.isArray(metadata.hardViolations) ? metadata.hardViolations as CandidateTimetable["hardViolations"] : [], softScore: generation.score ?? 0, metrics };
 }
 
-function asAggregateCandidate(generation: { aggregateSchedules: Array<{ eventId: string; timeSlotId: string | null; date: Date | null; startTime: string | null; endTime: string | null; venues: Array<{ venueId: string; allocatedCapacity: number }>; invigilators: Array<{ invigilatorId: string; venueId: string | null }> }>; metadata: unknown; score: number | null }): AggregateCandidateTimetable {
+function asAggregateCandidate(generation: { aggregateSchedules: Array<{ eventId: string; timeSlotId: string | null; date: Date | null; startTime: string | null; endTime: string | null; venues: Array<{ venueId: string; allocatedCapacity: number; allocatedCandidates: number | null }>; invigilators: Array<{ invigilatorId: string; venueId: string | null }> }>; metadata: unknown; score: number | null }): AggregateCandidateTimetable {
   const metadata = (generation.metadata && typeof generation.metadata === "object" ? generation.metadata : {}) as Record<string, unknown>;
   return {
-    assignments: generation.aggregateSchedules.map((schedule) => ({ eventId: schedule.eventId, timeSlotId: schedule.timeSlotId, date: schedule.date?.toISOString().slice(0, 10) ?? "", startTime: schedule.startTime ?? "", endTime: schedule.endTime ?? "", venues: schedule.venues.map((venue) => ({ venueId: venue.venueId, allocatedCapacity: venue.allocatedCapacity })), invigilators: schedule.invigilators.map((item) => ({ invigilatorId: item.invigilatorId, venueId: item.venueId ?? undefined })) })),
+    assignments: generation.aggregateSchedules.map((schedule) => ({ eventId: schedule.eventId, timeSlotId: schedule.timeSlotId, date: schedule.date?.toISOString().slice(0, 10) ?? "", startTime: schedule.startTime ?? "", endTime: schedule.endTime ?? "", venues: schedule.venues.map((venue) => ({ venueId: venue.venueId, allocatedCapacity: venue.allocatedCapacity, allocatedCandidates: venue.allocatedCandidates })), invigilators: schedule.invigilators.map((item) => ({ invigilatorId: item.invigilatorId, venueId: item.venueId ?? undefined })) })),
     unscheduledEvents: Array.isArray(metadata.unscheduledEvents) ? metadata.unscheduledEvents as AggregateCandidateTimetable["unscheduledEvents"] : [],
     hardViolations: Array.isArray(metadata.hardViolations) ? metadata.hardViolations as AggregateCandidateTimetable["hardViolations"] : [],
     softScore: generation.score ?? 0,
@@ -113,6 +113,7 @@ export async function getGenerationHallCollisions(generationId: string) {
     const first = rows[i];
     for (let j = i + 1; j < rows.length; j += 1) {
       const second = rows[j];
+      if (generation.generationMode === "AGGREGATE_EVENT") continue;
       if (!slotsOverlap(first.timeSlot, second.timeSlot)) continue;
       if (!first.venues.some((venue) => second.venues.some((other) => venue.venueId === other.venueId))) continue;
       collisions.push({

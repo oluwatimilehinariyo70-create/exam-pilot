@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exportValues } from "@/server/timetable/export-service";
+import { exportValues, timetableExcel, timetablePdf } from "@/server/timetable/export-service";
 import { filterTimetableRows, publicTimetableData } from "@/domain/timetable/public-data";
 import type { AggregateSchedulingDataset, AggregateCandidateTimetable } from "@/domain/timetable";
 
@@ -9,4 +9,5 @@ const candidate = { assignments:[], sittings:[{eventId:"e",sequenceNumber:1,batc
 describe("public timetable and exports",()=>{
   it("whitelists timetable rows and preserves CBT batch fields",()=>{const data=publicTimetableData(candidate,dataset);expect(data.rows).toHaveLength(1);expect(data.rows[0]).toMatchObject({courseCode:"GST101",mode:"CBT",candidateCount:100,batch:1});expect(JSON.stringify(data)).not.toContain("student");expect(exportValues(data.rows[0])).toContain(1);});
   it("filters by programme, date, venue, and mode",()=>{const row=publicTimetableData(candidate,dataset).rows;expect(filterTimetableRows(row,{programme:"prog",level:"100",date:"2026-01-05",venue:"v",mode:"CBT"})).toHaveLength(1);expect(filterTimetableRows(row,{mode:"PEN_ON_PAPER"})).toHaveLength(0);});
+  it("carries written shared and split seat allocations into both export formats", async()=>{const written={...dataset,events:[{...dataset.events[0],id:"a",title:"CSC301",memberCourseCodes:["CSC301"],candidateCount:120,examMode:"PEN_ON_PAPER" as const}],venues:[{id:"llt",code:"LLT1",name:"LLT1",capacity:300,examCapacity:300,capability:"WRITTEN" as const,active:true},{id:"nav",code:"NAVATES2",name:"Navates 2",capacity:160,examCapacity:160,capability:"WRITTEN" as const,active:true}]};const writtenCandidate={assignments:[{eventId:"a",timeSlotId:null,date:"2026-01-05",startTime:"08:00",endTime:"09:00",venues:[{venueId:"llt",allocatedCandidates:120,allocatedCapacity:300}],invigilators:[]}],sittings:[],unscheduledEvents:[],hardViolations:[],softScore:0,metrics:{}} as unknown as AggregateCandidateTimetable;const data={...publicTimetableData(writtenCandidate,written),revisionNumber:1,status:"COMPLETED",publishedAt:null};expect(data.rows[0]?.candidateCount).toBe(120);expect(exportValues(data.rows[0]!)).toContain(120);expect((await timetablePdf(data)).subarray(0,4).toString()).toBe("%PDF");const workbook=await timetableExcel(data);expect(workbook.subarray(0,2).toString("hex")).toBe("504b");});
 });

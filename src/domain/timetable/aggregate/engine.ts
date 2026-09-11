@@ -4,7 +4,7 @@ import { resolveAggregateGenerationConfig } from "./config";
 import type { AggregateCandidateTimetable, AggregateConstraintViolation, AggregateEventDiagnostic, AggregateExamAssignment, AggregateGenerationConfig, AggregateSchedulingDataset, AggregateSlotEvaluation, AggregateTimetableMetrics, SchedulingExamEvent, UnscheduledAggregateEvent } from "./types";
 import { validateAggregateTimetable } from "./validation";
 
-type MutableState = { assignments: AggregateExamAssignment[]; eventSlots: Map<string, string>; slotEvents: Map<string, Set<string>>; slotVenues: Map<string, Set<string>>; slotInvigilators: Map<string, Set<string>>; dailyInvigilators: Map<string, number>; totalInvigilators: Map<string, number> };
+type MutableState = { assignments: AggregateExamAssignment[]; eventSlots: Map<string, string>; slotEvents: Map<string, Set<string>>; slotVenues: Map<string, Map<string, number>>; slotInvigilators: Map<string, Set<string>>; dailyInvigilators: Map<string, number>; totalInvigilators: Map<string, number> };
 
 function stableSeed(value: string, seed: number) { let hash = seed | 0; for (let index = 0; index < value.length; index += 1) hash = (hash * 31 + value.charCodeAt(index)) | 0; return Math.abs(hash); }
 function slotOrder(dataset: AggregateSchedulingDataset) { return new Map(dataset.timeSlots.slice().sort((a, b) => `${a.date}|${a.startTime}|${a.id}`.localeCompare(`${b.date}|${b.startTime}|${b.id}`)).map((slot, index) => [slot.id, index])); }
@@ -54,7 +54,7 @@ function evaluateSlot(event: SchedulingExamEvent, slot: AggregateSchedulingDatas
     if (state.eventSlots.get(otherId) !== slot.id) continue;
     if (edge.hard) hardViolations.push({ code: "EVENT_CONFLICT", message: "A hard-conflicting exam event is already assigned to this slot.", metadata: { eventId: event.id, conflictingEventId: otherId, reasons: edge.reasons, timeSlotId: slot.id } });
   }
-  const venues = hardViolations.some((item) => item.code === "EVENT_DURATION_EXCEEDS_SLOT") ? undefined : allocateAggregateVenues(event.candidateCount, event.examMode, slot, dataset.venues, dataset.venueUnavailability, state.slotVenues.get(slot.id) ?? new Set(), config.venueSplitPenalty);
+  const venues = hardViolations.some((item) => item.code === "EVENT_DURATION_EXCEEDS_SLOT") ? undefined : allocateAggregateVenues(event.candidateCount, event.examMode, slot, dataset.venues, dataset.venueUnavailability, state.slotVenues.get(slot.id) ?? new Map(), config.venueSplitPenalty);
   if (venues && !venues.success) hardViolations.push({ code: venues.failureCode ?? "INSUFFICIENT_VENUE_CAPACITY", message: venues.failureReason ?? "No compatible venue allocation was found.", metadata: { eventId: event.id, candidateCount: event.candidateCount, examMode: event.examMode, timeSlotId: slot.id } });
   const invigilators = venues?.success ? allocateAggregateInvigilators(slot, venues.venueAssignments.map((venue) => venue.venueId), dataset.invigilators, dataset.invigilatorUnavailability, state.slotInvigilators.get(slot.id) ?? new Set(), state.dailyInvigilators, state.totalInvigilators, config) : undefined;
   if (invigilators && !invigilators.success) hardViolations.push({ code: invigilators.failureCode ?? "INSUFFICIENT_INVIGILATORS", message: invigilators.failureReason ?? "No invigilator allocation was found.", metadata: { eventId: event.id, timeSlotId: slot.id } });
@@ -67,13 +67,14 @@ function evaluateSlot(event: SchedulingExamEvent, slot: AggregateSchedulingDatas
 function commitAssignment(assignment: AggregateExamAssignment, state: MutableState, dataset: AggregateSchedulingDataset) {
   state.assignments.push(assignment); state.eventSlots.set(assignment.eventId, assignment.timeSlotId!);
   const events = state.slotEvents.get(assignment.timeSlotId!) ?? new Set<string>(); events.add(assignment.eventId); state.slotEvents.set(assignment.timeSlotId!, events);
-  const venues = state.slotVenues.get(assignment.timeSlotId!) ?? new Set<string>(); assignment.venues.forEach((venue) => venues.add(venue.venueId)); state.slotVenues.set(assignment.timeSlotId!, venues);
+  const venues = state.slotVenues.get(assignment.timeSlotId!) ?? new Map<string, number>(); assignment.venues.forEach((venue) => venues.set(venue.venueId, (venues.get(venue.venueId) ?? 0) + (venue.allocatedCandidates ?? 0))); state.slotVenues.set(assignment.timeSlotId!, venues);
   const invigilators = state.slotInvigilators.get(assignment.timeSlotId!) ?? new Set<string>(); assignment.invigilators.forEach((item) => invigilators.add(item.invigilatorId)); state.slotInvigilators.set(assignment.timeSlotId!, invigilators);
   const slot = slotFor(dataset, assignment.timeSlotId!); if (slot) for (const item of assignment.invigilators) { state.dailyInvigilators.set(`${item.invigilatorId}|${slot.date}`, (state.dailyInvigilators.get(`${item.invigilatorId}|${slot.date}`) ?? 0) + 1); state.totalInvigilators.set(item.invigilatorId, (state.totalInvigilators.get(item.invigilatorId) ?? 0) + 1); }
 }
 
 function generateAttempt(dataset: AggregateSchedulingDataset, config: AggregateGenerationConfig, attempt: number): AggregateCandidateTimetable {
-  const state: MutableState = { assignments: [], eventSlots: new Map(), slotEvents: new Map(), slotVenues: new Map(), slotInvigilators: new Map(), dailyInvigilators: new Map(), totalInvigilators: new Map() }; const unscheduledEvents: UnscheduledAggregateEvent[] = [];
+  const initialVenueUsage = new Map<string, Map<string, number>>(); for (const item of dataset.initialVenueUsage ?? []) { const slot = item.slotId ?? dataset.timeSlots.find((candidate) => candidate.date === item.date && candidate.startTime === item.startTime && candidate.endTime === item.endTime)?.id; if (!slot) continue; const usage = initialVenueUsage.get(slot) ?? new Map<string, number>(); usage.set(item.venueId, (usage.get(item.venueId) ?? 0) + item.allocatedCandidates); initialVenueUsage.set(slot, usage); }
+  const state: MutableState = { assignments: [], eventSlots: new Map(), slotEvents: new Map(), slotVenues: initialVenueUsage, slotInvigilators: new Map(), dailyInvigilators: new Map(), totalInvigilators: new Map() }; const unscheduledEvents: UnscheduledAggregateEvent[] = [];
   const ordered = orderEvents(dataset.events.filter((event) => event.candidateCount >= 0), dataset, state, config.seed + attempt); const sortedSlots = dataset.timeSlots.slice().sort((a, b) => `${a.date}|${a.startTime}|${a.id}`.localeCompare(`${b.date}|${b.startTime}|${b.id}`));
   for (const event of ordered) {
     const evaluations: AggregateSlotEvaluation[] = []; let selected: { assignment: AggregateExamAssignment; evaluation: AggregateSlotEvaluation } | undefined;

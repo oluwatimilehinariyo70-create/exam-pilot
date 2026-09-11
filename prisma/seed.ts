@@ -224,34 +224,23 @@ async function main() {
     skipDuplicates: true,
   });
 
-  await prisma.venue.createMany({
-    data: [
-      { code: "SCI-HALL-A", name: "Science Hall A", location: "Science Complex", capacity: 120 },
-      { code: "SCI-HALL-B", name: "Science Hall B", location: "Science Complex", capacity: 80 },
-      { code: "CSC-LAB-1", name: "Computer Laboratory 1", location: "ICT Building", capacity: 45 },
-    ],
-    skipDuplicates: true,
-  });
-
   const knownVenues = [
-    { code: "LLT-1", name: "LLT 1", capacity: 170, examCapacity: 170, capability: "WRITTEN" as const },
-    { code: "NAVATES-2", name: "Navates 2", capacity: 100, examCapacity: 100, capability: "WRITTEN" as const },
+    { code: "NSC", name: "NSC", capacity: 200, examCapacity: 200, capability: "WRITTEN" as const },
     { code: "CAFE", name: "CAFE", capacity: 180, examCapacity: 180, capability: "WRITTEN" as const },
-    { code: "OLD-LT", name: "Old LT", capacity: 170, examCapacity: 170, capability: "WRITTEN" as const },
-    { code: "AUDITORIUM", name: "Auditorium", capacity: 120, examCapacity: 120, capability: "WRITTEN" as const },
-    { code: "NSC", name: "NSC", capacity: 180, examCapacity: 180, capability: "WRITTEN" as const },
-    { code: "PRE-DEGREE", name: "Pre-Degree", capacity: 200, examCapacity: 200, capability: "WRITTEN" as const },
-    { code: "SCIENCE-COMPLEX", name: "Science Complex", capacity: 95, examCapacity: 95, capability: "WRITTEN" as const },
+    { code: "LLT1", name: "LLT1", capacity: 300, examCapacity: 300, capability: "WRITTEN" as const },
+    { code: "S1", name: "S1", capacity: 60, examCapacity: 60, capability: "WRITTEN" as const },
+    { code: "S2", name: "S2", capacity: 60, examCapacity: 60, capability: "WRITTEN" as const },
+    { code: "S3", name: "S3", capacity: 40, examCapacity: 40, capability: "WRITTEN" as const },
+    { code: "LR1", name: "LR1", capacity: 60, examCapacity: 60, capability: "WRITTEN" as const },
+    { code: "LR2", name: "LR2", capacity: 60, examCapacity: 60, capability: "WRITTEN" as const },
+    { code: "LR3", name: "LR3", capacity: 60, examCapacity: 60, capability: "WRITTEN" as const },
+    { code: "LR4", name: "LR4", capacity: 60, examCapacity: 60, capability: "WRITTEN" as const },
+    { code: "LR5", name: "LR5", capacity: 60, examCapacity: 60, capability: "WRITTEN" as const },
+    { code: "NAVATES2", name: "Navates 2", capacity: 160, examCapacity: 160, capability: "WRITTEN" as const },
     { code: "UCRC", name: "UCRC", capacity: 250, computerCapacity: 250, usableComputerCapacity: 250, capability: "CBT" as const },
     { code: "LIBRARY-ICT", name: "Library ICT", capacity: 100, computerCapacity: 100, usableComputerCapacity: 100, capability: "CBT" as const },
   ];
-  for (const venue of knownVenues) {
-    await prisma.venue.upsert({
-      where: { code: venue.code },
-      update: venue,
-      create: venue,
-    });
-  }
+  for (const venue of knownVenues) if (!(await prisma.venue.findUnique({ where: { code: venue.code }, select: { id: true } }))) await prisma.venue.create({ data: venue });
 
   await prisma.invigilator.createMany({
     data: [
