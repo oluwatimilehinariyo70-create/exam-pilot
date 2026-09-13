@@ -1,6 +1,7 @@
 import { getConflictingEvents } from "../../exams";
 import { intervalsOverlap, makeInterval, timeToMinutes, type TimeInterval } from "../intervals";
 import { resourceUnavailable, slotDurationMinutes, venueEffectiveCapacity, venueSupports } from "./allocation";
+import { fixedSlotCalendarViolation, fixedSlotTurnaroundViolation } from "./fixed-rules";
 import type { AggregateCandidateTimetable, AggregateConstraintViolation, AggregateSchedulingDataset } from "./types";
 
 function intervalFor(assignment: AggregateCandidateTimetable["assignments"][number], dataset: AggregateSchedulingDataset): TimeInterval | null {
@@ -23,6 +24,10 @@ export function validateAggregateTimetable(timetable: AggregateCandidateTimetabl
     if (assignmentIds.has(assignment.eventId)) violations.push({ code: "DUPLICATE_EVENT_ASSIGNMENT", message: "An event has more than one timetable assignment.", metadata: { eventId: assignment.eventId } }); assignmentIds.add(assignment.eventId);
     if (!event) violations.push({ code: "INACTIVE_RESOURCE", message: "An assignment references a missing or inactive exam event.", metadata: { eventId: assignment.eventId } });
     if (fixedMode && (!slot || slot.examPeriodId !== dataset.examPeriod.id)) violations.push({ code: "INVALID_TIME_SLOT", message: "Assignment uses a time slot outside the selected examination period.", metadata: { eventId: assignment.eventId, timeSlotId: assignment.timeSlotId } });
+    if (fixedMode && slot) {
+      const calendarViolation = fixedSlotCalendarViolation(slot, dataset); if (calendarViolation) violations.push({ ...calendarViolation, metadata: { ...calendarViolation.metadata, eventId: assignment.eventId } });
+      const turnaroundViolation = fixedSlotTurnaroundViolation(slot, dataset); if (turnaroundViolation) violations.push({ ...turnaroundViolation, metadata: { ...turnaroundViolation.metadata, eventId: assignment.eventId } });
+    }
     if (!fixedMode && !interval) violations.push({ code: "INVALID_INTERVAL", message: "Flexible assignment must contain a valid date, start time, and end time.", metadata: { eventId: assignment.eventId } });
     if (!event || !interval) continue;
     if (fixedMode && slot && slotDurationMinutes(slot) < event.durationMinutes) violations.push({ code: "EVENT_DURATION_EXCEEDS_SLOT", message: "The assigned fixed slot is shorter than the event duration.", metadata: { eventId: event.id } });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildConflictGraph, type ExamEvent } from "@/domain/exams";
-import { generateAggregateTimetable, resolveAggregateGenerationConfig, validateAggregateTimetable, type AggregateSchedulingDataset, type SchedulingExamEvent } from "@/domain/timetable";
+import { generateAggregateTimetable, resolveAggregateGenerationConfig, validateAggregateTimetable, type AggregateCalendarDay, type AggregateSchedulingDataset, type SchedulingExamEvent } from "@/domain/timetable";
 
 function event(id: string, overrides: Partial<SchedulingExamEvent> = {}): ExamEvent {
   const cohort = overrides.cohortKeys?.[0] ?? `p-${id}|100`;
@@ -41,6 +41,8 @@ function dataset(events: SchedulingExamEvent[], options: Parameters<typeof build
 }
 
 describe("aggregate fixed-slot timetable engine", () => {
+  const bouestiDay = (overrides: Partial<AggregateCalendarDay> = {}): AggregateCalendarDay => ({ examPeriodId: "period", date: "2026-01-10", enabled: true, dayType: "WEEKDAY", startTime: "08:30", endTime: "17:30", ...overrides });
+
   it("schedules event units without student or hall identity data", () => {
     const input = dataset([event("A", { candidateCount: 80 }) as unknown as SchedulingExamEvent]);
     const result = generateAggregateTimetable(input, { maxGenerationAttempts: 1 });
@@ -96,5 +98,65 @@ describe("aggregate fixed-slot timetable engine", () => {
     const second = generateAggregateTimetable(input, { maxGenerationAttempts: 3, seed: 99 });
     expect(second.assignments).toEqual(first.assignments);
     expect(validateAggregateTimetable(first, input)).toEqual([]);
+  });
+
+  it("prefers the smallest BOUESTI session that fits the exam", () => {
+    const input = dataset([event("TWO_HOUR", { durationMinutes: 120 }) as unknown as SchedulingExamEvent], {}, {
+      calendarDays: [bouestiDay()],
+      timeSlots: [
+        { id: "morning", examPeriodId: "period", date: "2026-01-10", startTime: "08:30", endTime: "11:30" },
+        { id: "midday", examPeriodId: "period", date: "2026-01-10", startTime: "12:00", endTime: "14:00" },
+        { id: "afternoon", examPeriodId: "period", date: "2026-01-10", startTime: "14:30", endTime: "17:30" },
+      ],
+    });
+    const result = generateAggregateTimetable(input, { maxGenerationAttempts: 1 });
+    expect(result.assignments[0]?.timeSlotId).toBe("midday");
+  });
+
+  it("falls back to a longer session when the preferred duration is unavailable", () => {
+    const input = dataset([event("TWO_HOUR", { durationMinutes: 120 }) as unknown as SchedulingExamEvent], {}, {
+      calendarDays: [bouestiDay()],
+      timeSlots: [
+        { id: "morning", examPeriodId: "period", date: "2026-01-10", startTime: "08:30", endTime: "11:30" },
+        { id: "afternoon", examPeriodId: "period", date: "2026-01-10", startTime: "14:30", endTime: "17:30" },
+      ],
+    });
+    const result = generateAggregateTimetable(input, { maxGenerationAttempts: 1 });
+    expect(["morning", "afternoon"]).toContain(result.assignments[0]?.timeSlotId);
+  });
+
+  it("rejects a three-hour exam from the two-hour BOUESTI session", () => {
+    const input = dataset([event("THREE_HOUR", { durationMinutes: 180 }) as unknown as SchedulingExamEvent], {}, {
+      calendarDays: [bouestiDay()],
+      timeSlots: [{ id: "midday", examPeriodId: "period", date: "2026-01-10", startTime: "12:00", endTime: "14:00" }],
+    });
+    const result = generateAggregateTimetable(input, { maxGenerationAttempts: 1 });
+    expect(result.unscheduledEvents[0]?.diagnostics.attemptedSlots[0]?.hardViolations.some((item) => item.code === "EVENT_DURATION_EXCEEDS_SLOT")).toBe(true);
+  });
+
+  it("skips fixed sessions on disabled or blackout days", () => {
+    for (const day of [bouestiDay({ enabled: false }), bouestiDay({ blackoutType: "PUBLIC_HOLIDAY" })]) {
+      const input = dataset([event("A") as unknown as SchedulingExamEvent], {}, { calendarDays: [day], timeSlots: [{ id: "morning", examPeriodId: "period", date: "2026-01-10", startTime: "08:30", endTime: "11:30" }] });
+      const result = generateAggregateTimetable(input, { maxGenerationAttempts: 1 });
+      expect(result.assignments).toHaveLength(0);
+      expect(result.unscheduledEvents[0]?.diagnostics.attemptedSlots[0]?.hardViolations.some((item) => item.code === "INVALID_CALENDAR_WINDOW")).toBe(true);
+    }
+  });
+
+  it("skips fixed sessions outside configured daily hours", () => {
+    const input = dataset([event("A") as unknown as SchedulingExamEvent], {}, { calendarDays: [bouestiDay({ startTime: "09:00" })], timeSlots: [{ id: "morning", examPeriodId: "period", date: "2026-01-10", startTime: "08:30", endTime: "11:30" }] });
+    const result = generateAggregateTimetable(input, { maxGenerationAttempts: 1 });
+    expect(result.assignments).toHaveLength(0);
+    expect(result.unscheduledEvents[0]?.diagnostics.attemptedSlots[0]?.hardViolations.some((item) => item.code === "INVALID_CALENDAR_WINDOW")).toBe(true);
+  });
+
+  it("enforces fixed-session turnaround while allowing the BOUESTI thirty-minute gap", () => {
+    const valid = dataset([event("A", { durationMinutes: 120 }) as unknown as SchedulingExamEvent], {}, { calendarDays: [bouestiDay()], timeSlots: [{ id: "morning", examPeriodId: "period", date: "2026-01-10", startTime: "08:30", endTime: "11:30" }, { id: "midday", examPeriodId: "period", date: "2026-01-10", startTime: "12:00", endTime: "14:00" }] });
+    const validResult = generateAggregateTimetable(valid, { maxGenerationAttempts: 1 });
+    expect(validateAggregateTimetable(validResult, valid)).toEqual([]);
+
+    const invalid = dataset([event("A", { durationMinutes: 120 }) as unknown as SchedulingExamEvent], {}, { calendarDays: [bouestiDay()], venueUnavailability: [{ resourceId: "venue-1", date: "2026-01-10", startTime: "08:30", endTime: "11:30" }], timeSlots: [{ id: "morning", examPeriodId: "period", date: "2026-01-10", startTime: "08:30", endTime: "11:30" }, { id: "tight", examPeriodId: "period", date: "2026-01-10", startTime: "11:45", endTime: "13:45" }] });
+    const invalidResult = generateAggregateTimetable(invalid, { maxGenerationAttempts: 1 });
+    expect(invalidResult.hardViolations.some((item) => item.code === "FIXED_SESSION_TURNAROUND") || invalidResult.unscheduledEvents[0]?.diagnostics.attemptedSlots.some((slot) => slot.hardViolations.some((item) => item.code === "FIXED_SESSION_TURNAROUND"))).toBe(true);
   });
 });

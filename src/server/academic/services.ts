@@ -273,7 +273,7 @@ export async function updateTimeSlot(id: string, input: TimeSlotInput, actorId: 
 }
 
 export async function previewTimeSlots(input: BulkTimeSlotInput) {
-  const period = await prisma.examPeriod.findUnique({ where: { id: input.examPeriodId }, include: { timeSlots: true } });
+  const period = await prisma.examPeriod.findUnique({ where: { id: input.examPeriodId }, include: { timeSlots: true, calendarDays: true } });
   if (!period) throw new AcademicError("NOT_FOUND", "The examination period was not found.", { examPeriodId: input.examPeriodId }, 404);
   const excluded = new Set(input.excludedDates);
   const proposed: Array<{ date: string; startTime: string; endTime: string; duplicate: boolean; collision: boolean }> = [];
@@ -282,6 +282,8 @@ export async function previewTimeSlots(input: BulkTimeSlotInput) {
     const day = cursor.getUTCDay();
     const key = dateKey(cursor);
     if (!input.daysOfWeek.includes(day) || (input.skipWeekends && (day === 0 || day === 6)) || excluded.has(key)) continue;
+    const calendarDay = period.calendarDays.find((candidate) => dateKey(candidate.date) === key);
+    if (calendarDay && (!calendarDay.enabled || calendarDay.blackoutType)) continue;
     for (const dailySession of input.dailySessions) {
       const duplicate = period.timeSlots.some((slot) => dateKey(slot.date) === key && slot.startTime === dailySession.startTime && slot.endTime === dailySession.endTime);
       const overlap = period.timeSlots.some((slot) => dateKey(slot.date) === key && timeToMinutes(dailySession.startTime) < timeToMinutes(slot.endTime) && timeToMinutes(slot.startTime) < timeToMinutes(dailySession.endTime));
