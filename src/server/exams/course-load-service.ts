@@ -13,6 +13,10 @@ const offeringInclude = {
   programme: { include: { department: true } },
 } satisfies Prisma.CourseOfferingInclude;
 
+const eventInclude = {
+  offerings: { include: { courseOffering: { include: offeringInclude } } },
+} satisfies Prisma.ExamEventInclude;
+
 const courseInclude = { department: true, semester: true } satisfies Prisma.CourseInclude;
 
 type Severity = "ERROR" | "WARNING";
@@ -183,16 +187,66 @@ async function audit(db: Prisma.TransactionClient, actorId: string, action: stri
 }
 
 async function refreshAutoEvents(db: Prisma.TransactionClient, sessionId: string, semesterId: string, actorId: string) {
-  const oldEvents: { id: string }[] = []; // Existing logical event IDs are retained across imports.
-  if (oldEvents.length) await db.examEvent.deleteMany({ where: { id: { in: oldEvents.map((event) => event.id) } } });
-  const offerings = await db.courseOffering.findMany({ where: { academicSessionId: sessionId, semesterId, active: true, examEvents: { none: {} } }, include: offeringInclude });
-  const domain = offerings.map((offering) => courseOfferingToDomain(offering));
-  const aggregate = aggregateCourseOfferings(domain, { defaultExamMode: "PEN_ON_PAPER" });
-  for (const event of aggregate.events) {
-    const created = await db.examEvent.create({ data: { academicSessionId: sessionId, semesterId, title: event.title, examMode: event.examMode, durationMinutes: event.durationMinutes, source: "AUTO_AGGREGATED", status: "DRAFT", createdById: actorId, offerings: { create: event.memberOfferings.map((member) => ({ courseOfferingId: member.id })) } } });
-    await audit(db, actorId, "EXAM_EVENT_AUTO_AGGREGATED", "ExamEvent", created.id, { candidateCount: event.candidateCount, offeringCount: event.memberOfferings.length });
+  const [offerings, existingEvents] = await Promise.all([
+    db.courseOffering.findMany({ where: { academicSessionId: sessionId, semesterId, active: true }, include: offeringInclude }),
+    db.examEvent.findMany({ where: { academicSessionId: sessionId, semesterId, source: "AUTO_AGGREGATED" }, include: eventInclude, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }),
+  ]);
+
+  // Manual merges own their memberships. New or re-imported offerings that are not in a manual
+  // event participate in automatic aggregation, while an operator's explicit merge is preserved.
+  const manualEvents = await db.examEvent.findMany({ where: { academicSessionId: sessionId, semesterId, source: "MANUAL_MERGE" }, select: { offerings: { select: { courseOfferingId: true } } } });
+  const manualOfferingIds = new Set(manualEvents.flatMap((event) => event.offerings.map((membership) => membership.courseOfferingId)));
+  const autoOfferings = offerings.filter((offering) => !manualOfferingIds.has(offering.id));
+  const aggregate = aggregateCourseOfferings(autoOfferings.map((offering) => courseOfferingToDomain(offering)), { defaultExamMode: "PEN_ON_PAPER" });
+  const desiredByKey = new Map(aggregate.events.map((event) => [createAggregationIdentity(event.memberOfferings[0]), event]));
+  const activeKeys = new Set(autoOfferings.map((offering) => createAggregationIdentity(courseOfferingToDomain(offering))));
+  const existingByKey = new Map<string, typeof existingEvents>();
+
+  for (const existing of existingEvents) {
+    const firstOffering = existing.offerings[0]?.courseOffering;
+    const key = firstOffering ? createAggregationIdentity(courseOfferingToDomain(firstOffering)) : undefined;
+    if (key) existingByKey.set(key, [...(existingByKey.get(key) ?? []), existing]);
+    else await archiveOrRemoveAutoEvent(db, existing.id);
+  }
+
+  for (const [key, event] of desiredByKey) {
+    const matches = existingByKey.get(key) ?? [];
+    const primary = matches[0];
+    if (!primary) {
+      const created = await db.examEvent.create({ data: { academicSessionId: sessionId, semesterId, title: event.title, examMode: event.examMode, durationMinutes: event.durationMinutes, source: "AUTO_AGGREGATED", status: "DRAFT", createdById: actorId, offerings: { create: event.memberOfferings.map((member) => ({ courseOfferingId: member.id })) } } });
+      await audit(db, actorId, "EXAM_EVENT_AUTO_AGGREGATED", "ExamEvent", created.id, { candidateCount: event.candidateCount, offeringCount: event.memberOfferings.length });
+      continue;
+    }
+
+    const desiredIds = new Set(event.memberOfferings.map((member) => member.id));
+    const currentIds = new Set(primary.offerings.map((membership) => membership.courseOfferingId));
+    const removeIds = [...currentIds].filter((id) => !desiredIds.has(id));
+    const addIds = [...desiredIds].filter((id) => !currentIds.has(id));
+    if (removeIds.length) await db.examEventOffering.deleteMany({ where: { examEventId: primary.id, courseOfferingId: { in: removeIds } } });
+    if (addIds.length) await db.examEventOffering.createMany({ data: addIds.map((courseOfferingId) => ({ examEventId: primary.id, courseOfferingId })), skipDuplicates: true });
+    await db.examEvent.update({ where: { id: primary.id }, data: { title: event.title, examMode: event.examMode, durationMinutes: event.durationMinutes, active: true, ...(primary.status === "ARCHIVED" ? { status: "DRAFT" as const } : {}) } });
+    for (const duplicate of matches.slice(1)) await archiveOrRemoveAutoEvent(db, duplicate.id);
+  }
+
+  // Invalid groups remain available to readiness diagnostics. Remove only auto events whose
+  // offerings no longer form a usable automatic group at all.
+  for (const [key, matches] of existingByKey) {
+    if (desiredByKey.has(key) || activeKeys.has(key)) continue;
+    for (const event of matches) await archiveOrRemoveAutoEvent(db, event.id);
   }
   return aggregate;
+}
+
+async function archiveOrRemoveAutoEvent(db: Prisma.TransactionClient, eventId: string) {
+  const [scheduleCount, sittingCount] = await Promise.all([
+    db.aggregateExamSchedule.count({ where: { eventId } }),
+    db.examSitting.count({ where: { examEventId: eventId } }),
+  ]);
+  if (!scheduleCount && !sittingCount) {
+    await db.examEvent.delete({ where: { id: eventId } });
+    return;
+  }
+  await db.examEvent.update({ where: { id: eventId }, data: { active: false, status: "ARCHIVED" } });
 }
 
 export async function commitCourseLoadImport(input: { fileName: string; academicSessionId: string; semesterId: string; csv: string; previewHash: string; commitMode: "CREATE_NEW" | "UPDATE_EXISTING" }, actorId: string) {
@@ -222,7 +276,10 @@ export async function listAggregateCourseOfferings(filters: { academicSessionId?
 }
 
 export async function listAggregateExamEvents(filters: { academicSessionId?: string; semesterId?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED" } = {}) {
-  return prisma.examEvent.findMany({ where: filters, include: { offerings: { include: { courseOffering: { include: offeringInclude } } } }, orderBy: [{ title: "asc" }, { createdAt: "desc" }] });
+  // The planning tab is an active-work view. Keep explicitly archived events available when a
+  // status filter is requested, but do not surface stale archived auto-events by default.
+  const where = filters.status ? filters : { ...filters, active: true };
+  return prisma.examEvent.findMany({ where, include: { offerings: { include: { courseOffering: { include: offeringInclude } } } }, orderBy: [{ title: "asc" }, { createdAt: "desc" }] });
 }
 
 export async function unmergeManualExamEvent(id: string, actorId: string) {

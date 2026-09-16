@@ -1,3 +1,5 @@
+import { cache } from "react";
+
 import { Prisma } from "@prisma/client";
 
 import { buildConflictGraph, type ExplicitEventConflict, type StudentEventOverlap, type ExamConflictGraph } from "@/domain/exams";
@@ -64,9 +66,17 @@ function buildStudentOverlaps(rows: { studentId: string; courseId: string }[], c
   return [...overlaps.values()].map(({ studentIds: _studentIds, ...overlap }) => overlap);
 }
 
-export async function buildAggregateConflictDataset(academicSessionId: string, semesterId: string, options: { includeStudentPrecision?: boolean } = {}): Promise<AggregateConflictDataset> {
-  const events = await prisma.examEvent.findMany({ where: { academicSessionId, semesterId, active: true }, include: eventInclude, orderBy: { id: "asc" } });
-  const explicitConflicts = await prisma.examConflict.findMany({ where: { academicSessionId, semesterId, active: true }, include: conflictInclude, orderBy: [{ courseAId: "asc" }, { courseBId: "asc" }] });
+// Both getAggregateDataReadiness() and buildAggregateSchedulingDataset() independently need this
+// dataset for the same (academicSessionId, semesterId) pair on every readiness check, which
+// otherwise runs the deep Prisma includes and the O(n^2) student-overlap computation twice per
+// request. react's cache() dedupes calls with matching arguments for the lifetime of a single
+// request, so within one readiness/generation call this now runs once instead of twice.
+export const buildAggregateConflictDataset = cache(async function buildAggregateConflictDataset(academicSessionId: string, semesterId: string, options: { includeStudentPrecision?: boolean } = {}): Promise<AggregateConflictDataset> {
+  // Independent tables, no shared dependency — one round trip instead of two.
+  const [events, explicitConflicts] = await Promise.all([
+    prisma.examEvent.findMany({ where: { academicSessionId, semesterId, active: true }, include: eventInclude, orderBy: { id: "asc" } }),
+    prisma.examConflict.findMany({ where: { academicSessionId, semesterId, active: true }, include: conflictInclude, orderBy: [{ courseAId: "asc" }, { courseBId: "asc" }] }),
+  ]);
   const persistedEvents = events as PersistedExamEvent[];
   const domainEvents = persistedEvents.map(examEventToDomain);
   const eventCourseIds = new Map<string, string[]>();
@@ -102,4 +112,4 @@ export async function buildAggregateConflictDataset(academicSessionId: string, s
   }
   const graph = buildConflictGraph(domainEvents, { explicitConflicts: explicitEventConflicts, studentOverlaps });
   return { academicSessionId, semesterId, events: domainEvents, graph, explicitConflicts, studentPrecisionAvailable: registrationCount > 0, registrationCount, issues };
-}
+});

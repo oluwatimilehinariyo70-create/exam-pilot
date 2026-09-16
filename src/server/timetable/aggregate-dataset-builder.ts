@@ -6,18 +6,21 @@ import { buildAggregateConflictDataset } from "@/server/exams/conflict-graph-ser
 function isoDate(value: Date) { return value.toISOString().slice(0, 10); }
 
 export async function buildAggregateSchedulingDataset(sessionId: string, semesterId: string, examPeriodId: string, config: Parameters<typeof resolveAggregateGenerationConfig>[0] = {}, schedulingMode: AggregateSchedulingMode = "FIXED_SESSIONS"): Promise<AggregateSchedulingDataset> {
-  const [session, semester, examPeriod] = await Promise.all([
+  // None of these six depend on each other's results — only on the (sessionId, semesterId,
+  // examPeriodId) params already in hand — so they used to run as two sequential round-trip
+  // stages (session/semester/examPeriod, then conflict data/venues/invigilators) for no real
+  // reason. Merging them into one stage trades a small amount of wasted work on the rare
+  // invalid-id error path for one fewer full round-trip on every normal call.
+  const [session, semester, examPeriod, conflictDataset, venues, invigilators] = await Promise.all([
     prisma.academicSession.findUnique({ where: { id: sessionId } }),
     prisma.semester.findUnique({ where: { id: semesterId } }),
     prisma.examPeriod.findUnique({ where: { id: examPeriodId }, include: { timeSlots: { orderBy: [{ date: "asc" }, { startTime: "asc" }, { id: "asc" }] }, calendarDays: { orderBy: [{ date: "asc" }, { id: "asc" }] } } }),
-  ]);
-  if (!session || !semester || !examPeriod) throw new AcademicError("NOT_FOUND", "The selected session, semester, or examination period was not found.", {}, 404);
-  if (semester.academicSessionId !== session.id || examPeriod.sessionId !== session.id || examPeriod.semesterId !== semester.id) throw new AcademicError("INVALID_SESSION_SEMESTER", "The selected timetable resources do not belong to the same academic period.", {}, 400);
-  const [conflictDataset, venues, invigilators] = await Promise.all([
     buildAggregateConflictDataset(sessionId, semesterId),
     prisma.venue.findMany({ where: { active: true }, orderBy: [{ capacity: "asc" }, { code: "asc" }] }),
     prisma.invigilator.findMany({ where: { active: true }, orderBy: [{ name: "asc" }, { id: "asc" }] }),
   ]);
+  if (!session || !semester || !examPeriod) throw new AcademicError("NOT_FOUND", "The selected session, semester, or examination period was not found.", {}, 404);
+  if (semester.academicSessionId !== session.id || examPeriod.sessionId !== session.id || examPeriod.semesterId !== semester.id) throw new AcademicError("INVALID_SESSION_SEMESTER", "The selected timetable resources do not belong to the same academic period.", {}, 400);
   const venueIds = venues.map((venue) => venue.id); const invigilatorIds = invigilators.map((item) => item.id);
   const [venueUnavailability, invigilatorUnavailability] = await Promise.all([
     prisma.venueUnavailablePeriod.findMany({ where: { venueId: { in: venueIds } } }),

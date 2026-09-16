@@ -64,6 +64,58 @@ function invigilatorNames(schedule: Row) {
     .join(", ") || "Unassigned";
 }
 
+const readinessCopy: Record<string, string> = {
+  NO_COURSE_OFFERINGS: "No course loads are ready for this session. Load course offerings before generating.",
+  MISSING_CANDIDATE_COUNT: "Some course loads are missing candidate counts. Complete the candidate totals in Course Loads.",
+  UNRESOLVED_EXAM_MODE: "Some course loads do not have an examination mode. Set the mode in Course Loads.",
+  UNRESOLVED_DURATION: "Some course loads do not have an exam duration. Set the duration in Course Loads.",
+  INCOMPATIBLE_AUTO_AGGREGATION: "Some course loads cannot be combined into compatible exam events. Review Course Loads.",
+  NO_EXAM_EVENTS: "No exam events are ready yet. Confirm the compatible course loads first.",
+  UNMATERIALIZED_OFFERING: "Some course loads are not included in an exam event. Review Course Loads.",
+  INVALID_EXPLICIT_CONFLICT: "A recorded academic conflict does not match the selected course loads. Review Conflicts.",
+  INACTIVE_RESOURCE: "The selected examination period is inactive. Choose an active period.",
+  NO_FEASIBLE_SLOT: "No usable examination session is available for the selected period.",
+  EVENT_DURATION_EXCEEDS_SLOT: "An examination is longer than every preferred session. Add a suitable session in Exam Period.",
+  INSUFFICIENT_VENUE_CAPACITY: "Written hall capacity is not enough for one or more examinations. Review Venues.",
+  INSUFFICIENT_INVIGILATORS: "At least one active invigilator is required before generating.",
+  NO_CBT_VENUES: "No active CBT venue has usable computer capacity.",
+  NO_CBT_TECHNICAL_SUPPORT: "No active technical-support staff are available for CBT sittings.",
+  CBT_BATCHING_DISABLED_FOR_OVERSIZED_EVENT: "A CBT examination is larger than the available computers and batching is disabled.",
+};
+
+const readinessActions: Record<string, { href: string; label: string }> = {
+  NO_COURSE_OFFERINGS: { href: "/exam-planning/course-loads", label: "Open Course Loads" },
+  MISSING_CANDIDATE_COUNT: { href: "/exam-planning/course-loads", label: "Open Course Loads" },
+  UNRESOLVED_EXAM_MODE: { href: "/exam-planning/course-loads", label: "Open Course Loads" },
+  UNRESOLVED_DURATION: { href: "/exam-planning/course-loads", label: "Open Course Loads" },
+  INCOMPATIBLE_AUTO_AGGREGATION: { href: "/exam-planning/course-loads", label: "Open Course Loads" },
+  INVALID_EXPLICIT_CONFLICT: { href: "/exam-planning/conflicts", label: "Open Conflicts" },
+  EVENT_DURATION_EXCEEDS_SLOT: { href: "/exam-planning/period", label: "Open Exam Period" },
+  INSUFFICIENT_VENUE_CAPACITY: { href: "/examination-data/venues", label: "Open Venues" },
+};
+
+function issueMessage(item: Row) {
+  return readinessCopy[text(item.code)] ?? (text(item.message) || "This setup item needs attention before generation.");
+}
+
+function issueAction(item: Row) {
+  return readinessActions[text(item.code)];
+}
+
+function practicalReason(item: Row) {
+  const diagnostics = item.diagnostics as Row | undefined;
+  const attempted = rows(diagnostics?.attemptedSlots);
+  // Attempted slots don't carry their own start/end time (SlotEvaluation / AggregateSlotEvaluation
+  // never populate those fields), so duration has to be read from each slot's own hard violations
+  // rather than recomputed here. The engine already flags this exact case with
+  // EVENT_DURATION_EXCEEDS_SLOT when it evaluates a slot for the aggregate engine.
+  if (attempted.length && attempted.every((slot) => rows(slot.hardViolations).some((violation) => text(violation.code) === "EVENT_DURATION_EXCEEDS_SLOT"))) {
+    return `No ${Number(diagnostics?.durationMinutes ?? 0)}-minute examination session remained.`;
+  }
+  if (text(item.reason) === "NO_FEASIBLE_SLOT") return "No valid examination session remained after academic, venue, and invigilator checks.";
+  return issueMessage(item);
+}
+
 export function GenerationWizard({ role }: { role: string }) {
   const writable = ["SUPER_ADMIN", "ADMIN", "EXAM_OFFICER"].includes(role);
   const [sessions, setSessions] = useState<Row[]>([]);
@@ -117,6 +169,10 @@ export function GenerationWizard({ role }: { role: string }) {
   const metrics = candidate?.metrics as Row | undefined;
   const blockers = rows(readiness?.blockers);
   const warnings = rows(readiness?.warnings);
+  const unscheduled = rows(candidate?.unscheduledEvents ?? candidate?.unscheduledCourses);
+  const hardViolations = rows(validation?.violations);
+  const sessionsUsed = new Set(schedules.map((schedule) => `${text(schedule.date ?? (schedule.timeSlot as Row)?.date)}|${text(schedule.startTime ?? (schedule.timeSlot as Row)?.startTime)}|${text(schedule.endTime ?? (schedule.timeSlot as Row)?.endTime)}`)).size;
+  const hallsUsed = new Set(schedules.flatMap((schedule) => rows(schedule.venues).map((venue) => text(venue.venueId)))).size;
 
   function resetOutput() {
     setReadiness(null);
@@ -181,7 +237,7 @@ export function GenerationWizard({ role }: { role: string }) {
             <div className="flex flex-wrap items-center gap-3">
               <span className="inline-flex items-center gap-2 rounded-full bg-teal/10 px-3 py-1 text-xs font-bold uppercase tracking-wider text-teal">
                 <Sparkles className="h-3.5 w-3.5" />
-                Premium timetable analyzer
+                Timetable generation
               </span>
               <Link href="/timetable/history" className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-navy">
                 <FileClock className="h-4 w-4" />
@@ -189,10 +245,10 @@ export function GenerationWizard({ role }: { role: string }) {
               </Link>
             </div>
             <h1 className="mt-5 max-w-3xl text-3xl font-bold tracking-tight text-navy lg:text-4xl">
-              Select the input data, click Analyze, get the exam timetable.
+              Check readiness, then generate the exam timetable.
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">
-              Choose a fixed-session aggregate event run for collision resolution, or keep the legacy registration generator for existing workflows.
+              Start with BOUESTI&apos;s preferred examination sessions. The review opens as soon as generation finishes.
             </p>
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               <Signal icon={Database} label="Inputs" value="Academic data" />
@@ -204,11 +260,11 @@ export function GenerationWizard({ role }: { role: string }) {
           <form onSubmit={analyze} className="border-t border-slate-200 bg-slate-50 p-6 xl:border-l xl:border-t-0 lg:p-8">
             <div className="flex items-center gap-2 text-sm font-bold text-navy">
               <Clock3 className="h-4 w-4 text-teal" />
-              Input data
+              Timetable setup
             </div>
             <div className="mt-5 space-y-4">
-              <label className="block text-sm font-semibold text-slate-700">Generation mode<select value={generationMode} onChange={(event) => { setGenerationMode(event.target.value as GenerationMode); resetOutput(); }} className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal outline-none focus:border-teal"><option value="AGGREGATE_EVENT">Aggregate event · collision resolution</option><option value="LEGACY_REGISTRATION">Legacy registration timetable</option></select></label>
-              {generationMode === "AGGREGATE_EVENT" && <label className="block text-sm font-semibold text-slate-700">Scheduling mode<select value={schedulingMode} onChange={(event) => { setSchedulingMode(event.target.value as SchedulingMode); resetOutput(); }} className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal outline-none focus:border-teal"><option value="FIXED_SESSIONS">Fixed / preferred sessions</option><option value="FLEXIBLE_INTERVALS">Flexible / custom intervals</option></select></label>}
+              <label className="block text-sm font-semibold text-slate-700">Data source<select value={generationMode} onChange={(event) => { setGenerationMode(event.target.value as GenerationMode); resetOutput(); }} className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal outline-none focus:border-teal"><option value="AGGREGATE_EVENT">Course loads and exam events (recommended)</option><option value="LEGACY_REGISTRATION">Legacy registration timetable</option></select></label>
+              {generationMode === "AGGREGATE_EVENT" && <label className="block text-sm font-semibold text-slate-700">Session timing<select value={schedulingMode} onChange={(event) => { setSchedulingMode(event.target.value as SchedulingMode); resetOutput(); }} className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal outline-none focus:border-teal"><option value="FIXED_SESSIONS">Preferred sessions (recommended)</option><option value="FLEXIBLE_INTERVALS">Custom intervals (advanced)</option></select></label>}<p className="mt-1 text-xs leading-5 text-slate-500">Preferred sessions use the times configured for the examination period.</p>
               <Select
                 label="Academic session"
                 value={sessionId}
@@ -241,14 +297,14 @@ export function GenerationWizard({ role }: { role: string }) {
               />
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-3">
+            <details className="rounded-lg border border-slate-200 bg-white px-3 py-2"><summary className="cursor-pointer text-sm font-semibold text-slate-600">Advanced generation options</summary><div className="mt-3 grid grid-cols-2 gap-3">
               <NumberInput label="Attempts" min={1} max={100} value={attempts} onChange={setAttempts} />
               <NumberInput label="Seed" value={seed} onChange={setSeed} />
-            </div>
+            </div></details>
 
-            <Button disabled={!writable || loading} size="lg" className="mt-6 w-full gap-2">
+            <Button disabled={!writable || loading || !sessionId || !semesterId || !periodId} size="lg" className="mt-6 w-full gap-2">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {phase === "checking" ? "Analyzing data" : phase === "generating" ? "Building timetable" : phase === "loading" ? "Preparing output" : "Analyze"}
+              {phase === "checking" ? "Checking readiness" : phase === "generating" ? "Generating timetable" : phase === "loading" ? "Opening review" : "Generate timetable"}
             </Button>
             {!writable && <p className="mt-3 text-xs text-slate-500">Your role is read-only. An exam officer or administrator can run analysis.</p>}
           </form>
@@ -266,7 +322,7 @@ export function GenerationWizard({ role }: { role: string }) {
       )}
 
       {readiness && !detail && (
-        <ReadinessIssues readiness={readiness} blockers={blockers} warnings={warnings} />
+        <ReadinessIssues blockers={blockers} warnings={warnings} />
       )}
 
       {detail && generation && (
@@ -295,13 +351,17 @@ export function GenerationWizard({ role }: { role: string }) {
             </div>
           </section>
 
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
             <Metric label={generationMode === "AGGREGATE_EVENT" ? "Scheduled events" : "Scheduled courses"} value={generationMode === "AGGREGATE_EVENT" ? metrics?.scheduledEvents : metrics?.scheduledCourses} />
             <Metric label="Unscheduled" value={generationMode === "AGGREGATE_EVENT" ? metrics?.unscheduledEvents : metrics?.unscheduledCourses} tone={Number((generationMode === "AGGREGATE_EVENT" ? metrics?.unscheduledEvents : metrics?.unscheduledCourses) ?? 0) ? "warn" : "good"} />
-            <Metric label="Candidates" value={metrics?.totalCandidates} />
+            <Metric label="Candidates" value={generationMode === "AGGREGATE_EVENT" ? metrics?.candidateWorkload : metrics?.totalCandidates} />
+            <Metric label="Sessions used" value={sessionsUsed} />
+            <Metric label="Halls used" value={hallsUsed} />
             <Metric label="Hard violations" value={metrics?.hardViolationCount} tone={Number(metrics?.hardViolationCount ?? 0) ? "warn" : "good"} />
             <Metric label="Score" value={generation.score} />
           </section>
+
+          {(unscheduled.length > 0 || hardViolations.length > 0) && <GenerationIssues unscheduled={unscheduled} violations={hardViolations} />}
 
           <TimetableSheet schedules={schedules} aggregate={generationMode === "AGGREGATE_EVENT"} />
         </>
@@ -357,24 +417,24 @@ function NumberInput({ label, value, min, max, onChange }: { label: string; valu
   );
 }
 
-function ReadinessIssues({ readiness, blockers, warnings }: { readiness: Row; blockers: Row[]; warnings: Row[] }) {
-  const summary = readiness.summary as Row;
+function ReadinessIssues({ blockers, warnings }: { blockers: Row[]; warnings: Row[] }) {
   return (
     <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
       <div className="flex items-start gap-3">
         <AlertCircle className="mt-0.5 h-5 w-5 text-amber-700" />
         <div>
-          <h2 className="font-bold text-navy">Input data needs attention</h2>
+          <h2 className="font-bold text-navy">Fix these items before generating</h2>
           <p className="mt-1 text-sm text-amber-800">
-            {summary?.events != null ? `Events: ${num(summary.events)} · Candidate workload: ${num(summary.candidateWorkload)} · ` : `Courses: ${num(summary?.courses)} · Students: ${num(summary?.students)} · Registrations: ${num(summary?.registrations)} · `}Time slots: {num(summary?.timeSlots)}
+            {blockers.length ? `${blockers.length} blocker${blockers.length === 1 ? "" : "s"} must be resolved before generation.` : "No blockers found. Review the warnings below before continuing."}
           </p>
         </div>
       </div>
       <div className="mt-4 space-y-2">
         {[...blockers, ...warnings].map((item, index) => (
           <div key={`${text(item.code)}-${index}`} className="rounded-lg border border-white/70 bg-white/70 p-3 text-sm text-slate-700">
-            <strong>{text(item.code)}</strong>
-            <p className="mt-1">{text(item.message)}</p>
+            <strong>{item.severity === "WARNING" ? "Review recommended" : "Action required"}</strong>
+            <p className="mt-1">{issueMessage(item)}</p>
+            {issueAction(item) && <Link className="mt-2 inline-flex text-xs font-semibold text-teal hover:text-navy" href={issueAction(item)!.href}>{issueAction(item)!.label} <ArrowRight className="ml-1 h-3.5 w-3.5" /></Link>}
           </div>
         ))}
       </div>
@@ -390,6 +450,17 @@ function Metric({ label, value, tone = "neutral" }: { label: string; value: unkn
       <p className={`mt-2 text-2xl font-bold ${toneClass}`}>{num(value)}</p>
     </div>
   );
+}
+
+function GenerationIssues({ unscheduled, violations }: { unscheduled: Row[]; violations: Row[] }) {
+  return <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
+    <h2 className="font-bold text-navy">Examinations needing attention</h2>
+    <p className="mt-1 text-sm text-amber-800">Review these practical reasons before opening the full timetable review.</p>
+    <div className="mt-4 space-y-2">
+      {unscheduled.map((item, index) => <div key={`unscheduled-${index}`} className="rounded-lg border border-white/70 bg-white/70 p-3 text-sm text-slate-700"><strong>{text(item.title ?? item.eventId ?? item.code ?? "Examination")}</strong><p className="mt-1">{practicalReason(item)}</p></div>)}
+      {violations.map((item, index) => <div key={`violation-${index}`} className="rounded-lg border border-white/70 bg-white/70 p-3 text-sm text-slate-700"><strong>Timetable check</strong><p className="mt-1">{text(item.message) || "This timetable check needs attention before opening the full review."}</p></div>)}
+    </div>
+  </section>;
 }
 
 function TimetableSheet({ schedules, aggregate = false }: { schedules: Row[]; aggregate?: boolean }) {

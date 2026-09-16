@@ -10,9 +10,17 @@ export type ReadinessDiagnostic = { code: string; severity: "BLOCKER" | "WARNING
 const highDensityThreshold = 0.5;
 
 export async function getAggregateDataReadiness(academicSessionId?: string, semesterId?: string) {
-  const session = academicSessionId ? await prisma.academicSession.findUnique({ where: { id: academicSessionId }, select: { id: true, name: true, active: true } }) : null;
-  const semester = semesterId ? await prisma.semester.findUnique({ where: { id: semesterId }, select: { id: true, name: true, academicSessionId: true, active: true } }) : null;
-  const offerings = await prisma.courseOffering.findMany({ where: { active: true, ...(academicSessionId ? { academicSessionId } : {}), ...(semesterId ? { semesterId } : {}) }, include: { course: { include: { department: true } }, programme: true } });
+  // session, semester, offerings, and the conflict dataset only depend on the two id params
+  // passed in here — none of them depend on each other's results — so they used to run as four
+  // sequential round trips (three awaits in a row, then a fourth later) for no reason. Running
+  // them together cuts that to one round trip's worth of latency instead of four, which matters
+  // a lot against a database with real per-round-trip latency.
+  const [session, semester, offerings, dataset] = await Promise.all([
+    academicSessionId ? prisma.academicSession.findUnique({ where: { id: academicSessionId }, select: { id: true, name: true, active: true } }) : Promise.resolve(null),
+    semesterId ? prisma.semester.findUnique({ where: { id: semesterId }, select: { id: true, name: true, academicSessionId: true, active: true } }) : Promise.resolve(null),
+    prisma.courseOffering.findMany({ where: { active: true, ...(academicSessionId ? { academicSessionId } : {}), ...(semesterId ? { semesterId } : {}) }, include: { course: { include: { department: true } }, programme: true } }),
+    academicSessionId && semesterId ? buildAggregateConflictDataset(academicSessionId, semesterId) : Promise.resolve(null as Awaited<ReturnType<typeof buildAggregateConflictDataset>> | null),
+  ]);
   const domainOfferings = offerings.map(courseOfferingToDomain);
   const aggregation = aggregateCourseOfferings(domainOfferings);
   const blockers: ReadinessDiagnostic[] = [];
@@ -33,8 +41,6 @@ export async function getAggregateDataReadiness(academicSessionId?: string, seme
   const aggregationIssues = aggregation.diagnostics.filter((diagnostic) => diagnostic.severity === "ERROR");
   if (aggregationIssues.length) blockers.push({ code: "INCOMPATIBLE_AUTO_AGGREGATION", severity: "BLOCKER", message: "One or more same-code groups cannot be materialized as compatible events.", count: aggregationIssues.length, ids: aggregationIssues.flatMap((issue) => issue.offeringIds) });
 
-  let dataset: Awaited<ReturnType<typeof buildAggregateConflictDataset>> | null = null;
-  if (academicSessionId && semesterId) dataset = await buildAggregateConflictDataset(academicSessionId, semesterId);
   const logicalExamCount = dataset?.events.length ?? aggregation.events.length;
   const graph = dataset?.graph;
   if (offerings.length && logicalExamCount === 0) blockers.push({ code: "NO_EXAM_EVENTS", severity: "BLOCKER", message: "Confirm compatible course loads so exam events can be materialized." });
