@@ -25,7 +25,12 @@ const statusOutput = `${status.stdout ?? ""}\n${status.stderr ?? ""}`;
 process.stdout.write(status.stdout ?? "");
 process.stderr.write(status.stderr ?? "");
 
-if (/P3005|database schema is not empty/i.test(statusOutput)) {
+let result = runPrisma(["migrate", "deploy"], { capture: true });
+let resultOutput = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+process.stdout.write(result.stdout ?? "");
+process.stderr.write(result.stderr ?? "");
+
+if (/P3005|database schema is not empty/i.test(resultOutput) || /P3005|database schema is not empty/i.test(statusOutput)) {
   const baseline = "20260823000000_baseline_existing_schema";
   const resolved = runPrisma(["migrate", "resolve", "--applied", baseline], { capture: true });
   const resolvedOutput = `${resolved.stdout ?? ""}\n${resolved.stderr ?? ""}`;
@@ -34,9 +39,11 @@ if (/P3005|database schema is not empty/i.test(statusOutput)) {
   if (resolved.status !== 0 && !/P3008|already recorded|already applied/i.test(resolvedOutput)) {
     process.exit(resolved.status ?? 1);
   }
-}
 
-const result = runPrisma(["migrate", "deploy"]);
+  result = runPrisma(["migrate", "deploy"], { capture: true });
+  process.stdout.write(result.stdout ?? "");
+  process.stderr.write(result.stderr ?? "");
+}
 
 if (result.error) {
   console.error(`Unable to run Prisma migrations: ${result.error.message}`);
