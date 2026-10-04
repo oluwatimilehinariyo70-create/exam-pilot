@@ -186,7 +186,7 @@ async function audit(db: Prisma.TransactionClient, actorId: string, action: stri
   await db.auditLog.create({ data: { actorId, action, entity, entityId, metadata: metadata as Prisma.InputJsonValue } });
 }
 
-async function refreshAutoEvents(db: Prisma.TransactionClient, sessionId: string, semesterId: string, actorId: string) {
+export async function refreshAutoEvents(db: Prisma.TransactionClient, sessionId: string, semesterId: string, actorId: string) {
   const [offerings, existingEvents] = await Promise.all([
     db.courseOffering.findMany({ where: { academicSessionId: sessionId, semesterId, active: true }, include: offeringInclude }),
     db.examEvent.findMany({ where: { academicSessionId: sessionId, semesterId, source: "AUTO_AGGREGATED" }, include: eventInclude, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }),

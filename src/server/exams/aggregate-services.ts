@@ -4,6 +4,7 @@ import { aggregateCourseOfferings, mergeCourseOfferings, validateExamEventMerge,
 import { prisma } from "@/lib/prisma";
 import { AcademicError } from "@/server/academic/errors";
 import { courseOfferingToDomain, examEventToDomain, type PersistedCourseOffering, type PersistedExamEvent } from "./mappers";
+import { refreshAutoEvents } from "./course-load-service";
 
 type Db = Prisma.TransactionClient;
 type Database = PrismaClientLike | Db;
@@ -61,9 +62,10 @@ async function assertOfferingDependencies(db: Database, input: Pick<CourseOfferi
   if (!session || !semester || !course || !programme) throw new AcademicError("NOT_FOUND", "The session, semester, course, and programme must all exist.", {}, 404);
   if (semester.academicSessionId !== session.id) throw new AcademicError("INVALID_SESSION_SEMESTER", "The offering semester must belong to the selected academic session.", {}, 400);
   if (course.semesterId !== semester.id) throw new AcademicError("INVALID_COURSE_SEMESTER", "The offering course must belong to the selected semester.", {}, 400);
-  if (!programmeCourse) throw new AcademicError("PROGRAMME_COURSE_REQUIRED", "The course must be assigned to the programme before creating an offering.", {}, 400);
+  if (!programmeCourse && course.departmentId !== programme.departmentId) throw new AcademicError("PROGRAMME_COURSE_REQUIRED", "The course must be assigned to the selected programme before creating an offering.", {}, 400);
   if (!programme.active || !course.active || !semester.active || !session.active) throw new AcademicError("INACTIVE_DEPENDENCY", "Offerings require active session, semester, course, and programme records.", {}, 409);
   if (!Number.isInteger(input.level) || input.level <= 0) throw new AcademicError("INVALID_LEVEL", "Level must be a positive whole number.", { level: input.level }, 400);
+  return { needsProgrammeCourseLink: !programmeCourse };
 }
 
 async function audit(db: Db, actorId: string | undefined, action: string, entity: string, entityId: string, metadata: Record<string, unknown> = {}) {
@@ -86,9 +88,10 @@ export async function findCourseOfferingsBySessionSemester(academicSessionId: st
 export async function createCourseOffering(input: CourseOfferingInput, actorId?: string) {
   assertNonNegativeCount(input.candidateCount);
   assertPositiveDuration(input.durationMinutesOverride);
-  await assertOfferingDependencies(prisma, input);
+  const dependencies = await assertOfferingDependencies(prisma, input);
   try {
     return await prisma.$transaction(async (db) => {
+      if (dependencies.needsProgrammeCourseLink) await db.programmeCourse.create({ data: { programmeId: input.programmeId, courseId: input.courseId } });
       const offering = await db.courseOffering.create({
         data: {
           academicSessionId: input.academicSessionId,
@@ -105,6 +108,7 @@ export async function createCourseOffering(input: CourseOfferingInput, actorId?:
         include: offeringInclude,
       });
       await audit(db, actorId, "COURSE_OFFERING_CREATED", "CourseOffering", offering.id, { candidateCount: offering.candidateCount });
+      await refreshAutoEvents(db, input.academicSessionId, input.semesterId, actorId ?? "");
       return offering;
     });
   } catch (error) {
@@ -123,6 +127,7 @@ export async function updateCourseOffering(id: string, input: Partial<Pick<Cours
     return await prisma.$transaction(async (db) => {
       const offering = await db.courseOffering.update({ where: { id }, data: input, include: offeringInclude });
       await audit(db, actorId, "COURSE_OFFERING_UPDATED", "CourseOffering", id, { candidateCount: offering.candidateCount, active: offering.active });
+      await refreshAutoEvents(db, current.academicSessionId, current.semesterId, actorId ?? "");
       return offering;
     });
   } catch (error) {
