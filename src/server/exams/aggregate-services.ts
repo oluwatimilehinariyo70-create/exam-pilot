@@ -110,7 +110,7 @@ export async function createCourseOffering(input: CourseOfferingInput, actorId?:
       await audit(db, actorId, "COURSE_OFFERING_CREATED", "CourseOffering", offering.id, { candidateCount: offering.candidateCount });
       await refreshAutoEvents(db, input.academicSessionId, input.semesterId, actorId ?? "");
       return offering;
-    });
+    }, { timeout: 60_000 });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new AcademicError("COURSE_OFFERING_EXISTS", "This logical course offering already exists for the selected session, semester, programme, level, and course.", {}, 409);
     throw error;
@@ -129,7 +129,7 @@ export async function updateCourseOffering(id: string, input: Partial<Pick<Cours
       await audit(db, actorId, "COURSE_OFFERING_UPDATED", "CourseOffering", id, { candidateCount: offering.candidateCount, active: offering.active });
       await refreshAutoEvents(db, current.academicSessionId, current.semesterId, actorId ?? "");
       return offering;
-    });
+    }, { timeout: 60_000 });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new AcademicError("COURSE_OFFERING_EXISTS", "That update would duplicate another logical course offering.", {}, 409);
     throw error;

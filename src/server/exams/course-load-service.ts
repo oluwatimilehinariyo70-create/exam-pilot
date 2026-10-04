@@ -266,7 +266,7 @@ export async function commitCourseLoadImport(input: { fileName: string; academic
     const history = await db.courseLoadImport.create({ data: { fileName: input.fileName, academicSessionId: input.academicSessionId, semesterId: input.semesterId, uploadedBy: actorId, totalRows: preview.summary.totalRows, validRows: preview.summary.validRows, invalidRows: preview.summary.invalidRows, duplicateRows: preview.summary.duplicateRows, createdOfferings, updatedOfferings, status: "COMPLETED", completedAt: new Date() } });
     await audit(db, actorId, "COURSE_LOAD_IMPORT_COMPLETED", "CourseLoadImport", history.id, { totalRows: preview.summary.totalRows, createdOfferings, updatedOfferings, logicalExams: aggregate.events.length });
     return { history, summary: { ...preview.summary, createdOfferings, updatedOfferings, logicalExams: aggregate.events.length } };
-  });
+  }, { timeout: 60_000 });
 }
 
 export async function listCourseLoadHistory() { return prisma.courseLoadImport.findMany({ include: { academicSession: true, semester: true, uploader: { select: { id: true, name: true, email: true } } }, orderBy: { createdAt: "desc" }, take: 100 }); }
